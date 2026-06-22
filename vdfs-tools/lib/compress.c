@@ -24,6 +24,7 @@
 #include <assert.h>
 #include <zlib.h>
 #include <zstd.h>
+#include <zstd_errors.h>
 #include <lzo/lzoconf.h>
 #include <lzo/lzo1x.h>
 #include <vdfs_tools.h>

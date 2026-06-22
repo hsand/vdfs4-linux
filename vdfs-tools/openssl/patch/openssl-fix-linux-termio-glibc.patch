@@ -1,0 +1,16 @@
+diff -urN a/crypto/ui/ui_openssl.c b/crypto/ui/ui_openssl.c
+--- a/crypto/ui/ui_openssl.c
++++ b/crypto/ui/ui_openssl.c
+@@ -190,10 +190,9 @@
+ # undef  SGTTY
+ #endif
+
+-#if defined(linux) && !defined(TERMIO)
+-# undef  TERMIOS
+-# define TERMIO
++#if defined(linux) && !defined(TERMIO) && !defined(TERMIOS)
++# define TERMIOS
+ # undef  SGTTY
+ #endif
+
+ #ifdef _LIBC

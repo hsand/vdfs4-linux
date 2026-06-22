@@ -24,6 +24,7 @@
 #include "vdfs_tools.h"
 #include "zlib.h"
 #include <zstd.h>
+#include <zstd_errors.h>
 #include <lzo/lzoconf.h>
 #include <lzo/lzo1x.h>
 #include <openssl/aes.h>

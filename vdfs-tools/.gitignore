@@ -1,0 +1,11 @@
+openssl/openssl-1.0.1g/
+zlib/zlib-1.2.8/
+zstd/zstd-1.5.2/
+lzolib/lzo-2.09/
+*.o
+*.d
+mkfs.vdfs
+fsck.vdfs
+tune.vdfs
+unpack.vdfs
+info.vdfs

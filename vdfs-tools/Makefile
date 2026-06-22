@@ -119,7 +119,7 @@ btrtst: CFLAGS += -DCONFIG_VDFS4_DEBUG_TOOLS_GET_BNODE
 all: mkfs
 
 openssl: $(OPENSSL_PACK)
-	@if [ ! -d $(OPENSSL_DIR) ]; then tar -xf $(OPENSSL_PACK) -C $(OPENSSL_BASE); cd $(OPENSSL_DIR); ./Configure no-shared no-asm linux-elf --cross-compile-prefix=$(CROSS_COMPILE) $(SECURE_CFLAGS); make build_crypto; fi
+	@if [ ! -d $(OPENSSL_DIR) ]; then tar -xf $(OPENSSL_PACK) -C $(OPENSSL_BASE); for p in $(OPENSSL_BASE)/patch/*.patch; do [ -f "$$p" ] && patch -d $(OPENSSL_DIR) -p1 -N --batch < "$$p"; done; cd $(OPENSSL_DIR); ./Configure no-shared no-asm linux-elf --cross-compile-prefix=$(CROSS_COMPILE) $(SECURE_CFLAGS); make build_crypto; fi
 
 zlib: $(ZLIB_ARCH)
 	@if [ ! -d $(ZLIB_DIR) ]; then tar -xf $(ZLIB_ARCH) -C $(ZLIB_BASE); cd $(ZLIB_DIR); env CC=$(CROSS_COMPILE)gcc CFLAGS="$(SECURE_CFLAGS)" ./configure; make; fi
