@@ -2216,11 +2216,34 @@ static inline void vdfs4_sw_decomp_vm_unmap(const void *mem, unsigned int count)
 }
 #endif
 
+/*
+ * Release one slot of the unpacked_pages[]/unpacked_scratch[] arrays built
+ * by vdfs4_auth_decompress_sw() below. "Scratch" slots are plain alloc_page()
+ * pages that never went into the page cache (see the comment in the
+ * allocation loop), so they just need a put_page(); real page-cache slots
+ * need the usual Uptodate/unlock/put sequence.
+ */
+static void vdfs4_release_unpacked_page(struct page *page, bool is_scratch,
+		bool mark_uptodate)
+{
+	if (is_scratch) {
+		put_page(page);
+		return;
+	}
+	if (mark_uptodate) {
+		SetPageUptodate(page);
+		mark_page_accessed(page);
+	}
+	unlock_page(page);
+	put_page(page);
+}
+
 int vdfs4_auth_decompress_sw(struct inode *inode, struct page **chunk_pages,
 		pgoff_t index, struct vdfs4_comp_extent_info *cext,
 		struct page *page)
 {
 	struct page **unpacked_pages = NULL;
+	bool *unpacked_scratch = NULL;
 	struct vdfs4_inode_info *inode_i = VDFS4_I(inode);
 	void *src = NULL, *dst = NULL;
 	int ret = 0;
@@ -2238,19 +2261,52 @@ int vdfs4_auth_decompress_sw(struct inode *inode, struct page **chunk_pages,
 	if (!(cext->flags & VDFS4_CHUNK_FLAG_UNCOMPR)) {
 		unpacked_pages = kcalloc(pages_count, sizeof(struct page *),
 					 GFP_NOFS);
-		if (!unpacked_pages)
+		unpacked_scratch = kcalloc(pages_count, sizeof(bool),
+					 GFP_NOFS);
+		if (!unpacked_pages || !unpacked_scratch) {
+			kfree(unpacked_pages);
+			kfree(unpacked_scratch);
 			return -ENOMEM;
+		}
 
 		for (i = 0; i < pages_count; i++) {
-			unpacked_pages[i] = find_or_create_page(
+			if (index + (pgoff_t)i == page_folio(page)->index) {
+				/*
+				 * This is the page the VFS handed us; our
+				 * caller already unlocked it before calling
+				 * us, so it's known safe to wait for.
+				 */
+				unpacked_pages[i] = find_or_create_page(
 						inode->i_mapping,
 						index + (pgoff_t)i,
 						GFP_NOFS | __GFP_HIGHMEM);
-			if (!unpacked_pages[i]) {
-				while (i-- > 0) {
-					unlock_page(unpacked_pages[i]);
-					put_page(unpacked_pages[i]);
+			} else {
+				/*
+				 * The other pages making up this compression
+				 * chunk might be later folios in an outer
+				 * readahead batch that the VFS has already
+				 * locked and is waiting on us to get back to
+				 * - grab_cache_page_nowait() is documented
+				 * safe to call while holding another page's
+				 * lock. If we can't get the real page-cache
+				 * slot immediately, decompress into a scratch
+				 * page instead; we just don't get to cache
+				 * that slot's result this time around.
+				 */
+				unpacked_pages[i] = grab_cache_page_nowait(
+						inode->i_mapping,
+						index + (pgoff_t)i);
+				if (!unpacked_pages[i]) {
+					unpacked_pages[i] = alloc_page(
+						GFP_NOFS | __GFP_HIGHMEM);
+					unpacked_scratch[i] = true;
 				}
+			}
+			if (!unpacked_pages[i]) {
+				while (i-- > 0)
+					vdfs4_release_unpacked_page(
+						unpacked_pages[i],
+						unpacked_scratch[i], false);
 				ret = -ENOMEM;
 				VDFS4_WARNING("(NOMEM)(%s) cannot alloc page for decomp sw\n",
 					      get_sid_from_inode(inode));
@@ -2260,10 +2316,9 @@ int vdfs4_auth_decompress_sw(struct inode *inode, struct page **chunk_pages,
 
 		/* Somebody already read it for us */
 		if (PageUptodate(page)) {
-			for (i = 0; i < pages_count; i++) {
-				unlock_page(unpacked_pages[i]);
-				put_page(unpacked_pages[i]);
-			}
+			for (i = 0; i < pages_count; i++)
+				vdfs4_release_unpacked_page(unpacked_pages[i],
+						unpacked_scratch[i], false);
 			ret = 0;
 			goto exit_alloc_pages;
 		}
@@ -2319,16 +2374,12 @@ exit_vm_unmap:
 exit_put_pages:
 	vdfs4_sw_decomp_vm_put();
 
-	for (i = 0; unpacked_pages && i < pages_count; i++) {
-		if (!ret) {
-			SetPageUptodate(unpacked_pages[i]);
-			mark_page_accessed(unpacked_pages[i]);
-		}
-		unlock_page(unpacked_pages[i]);
-		put_page(unpacked_pages[i]);
-	}
+	for (i = 0; unpacked_pages && i < pages_count; i++)
+		vdfs4_release_unpacked_page(unpacked_pages[i],
+				unpacked_scratch[i], !ret);
 exit_alloc_pages:
 	kfree(unpacked_pages);
+	kfree(unpacked_scratch);
 
 	return ret;
 }
