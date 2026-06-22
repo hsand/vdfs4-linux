@@ -2097,8 +2097,19 @@ int vdfs4_read_chunk(struct page *page, struct page **chunk_pages,
 			if (!chunk_pages[count]) {
 				chunk_pages[count] = alloc_page(
 						GFP_NOFS | __GFP_HIGHMEM);
-				if (chunk_pages[count])
+				if (chunk_pages[count]) {
+					/*
+					 * vdfs4__read() looks at
+					 * page_folio(page)->index to figure
+					 * out which block to read into this
+					 * slot - a freshly alloc_page()'d page
+					 * has no defined index, so it must be
+					 * set explicitly here.
+					 */
+					page_folio(chunk_pages[count])->index =
+							(pgoff_t)page_idx;
 					lock_page(chunk_pages[count]);
+				}
 			}
 		}
 		if (!chunk_pages[count]) {

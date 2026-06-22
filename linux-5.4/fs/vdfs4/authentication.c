@@ -252,38 +252,6 @@ int vdfs4_check_hash_chunk(struct vdfs4_inode_info *inode_i,
 	ret = vdfs4_get_and_cmp_hash(inode_i, extent_idx,
 			inode_i->fbc->comp_extents_n,
 			hash_calc, inode_i->fbc->hash_len);
-	if (ret == -EINVAL) {
-		/*
-		 * TEMPORARY DIAGNOSTIC: recompute the hash a second time from
-		 * the exact same buffer to distinguish two failure modes:
-		 *  - if this second hash DIFFERS from hash_calc, the
-		 *    underlying memory changed between the two computations
-		 *    (a vmap/aliasing race - the buffer isn't actually
-		 *    stable across the two reads).
-		 *  - if it MATCHES hash_calc (both consistently "wrong"
-		 *    relative to the stored hash), the corruption happened
-		 *    earlier, while populating the source pages, not during
-		 *    hash computation.
-		 * Remove once the concurrent hash-mismatch root cause is found.
-		 */
-		void *hash_calc2 = kzalloc(inode_i->fbc->hash_len, GFP_NOFS);
-
-		if (hash_calc2) {
-			int ret2 = inode_i->fbc->hash_fn(buffer, length,
-					hash_calc2);
-
-			if (!ret2) {
-				bool same = !memcmp(hash_calc, hash_calc2,
-						inode_i->fbc->hash_len);
-				VDFS4_ERR("DIAG: hash recompute %s (extent_idx=%zu len=%zu pid=%d)",
-					  same ?
-					  "MATCHES first (buffer stable, corruption is upstream of hashing)" :
-					  "DIFFERS from first (buffer changed under us - vmap/aliasing race)",
-					  extent_idx, length, task_pid_nr(current));
-			}
-			kfree(hash_calc2);
-		}
-	}
 #ifdef VDFS4_DEBUG_DUMP
 	if (ret == -EINVAL)
 		VDFS4_MDUMP("sw path decompression", buffer, length);
