@@ -504,6 +504,17 @@ int vdfs4_debugarea_check(struct vdfs4_sb_info *sbi)
 	return rtn;
 }
 
+/*
+ * Several callers pass a whole compression chunk, bnode, or bitmap here
+ * (anywhere from a few KB up to tens of KB) on an error path. print_hex_dump()
+ * has real per-line overhead, and on a noisy/loaded console that adds up to
+ * tens of seconds to minutes for a single dump - and these calls happen
+ * inline on the read() path, under the dump mutex below, so one slow dump
+ * stalls every other thread that hits an error at the same time. Cap it: this
+ * is a debug aid, not something that needs the full buffer to be useful.
+ */
+#define VDFS4_MDUMP_MAX_LEN 256
+
 void vdfs4_memory_dump(const char *desc, const void *buf, size_t len)
 {
 	static DEFINE_MUTEX(dump);
@@ -512,6 +523,9 @@ void vdfs4_memory_dump(const char *desc, const void *buf, size_t len)
 #ifdef CONFIG_VD_RELEASE
 	prefix_type = DUMP_PREFIX_OFFSET;
 #endif
+
+	if (len > VDFS4_MDUMP_MAX_LEN)
+		len = VDFS4_MDUMP_MAX_LEN;
 
 	mutex_lock(&dump);
 
