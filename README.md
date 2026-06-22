@@ -14,12 +14,22 @@ writing actual firmware images:
 
 Full history of every change, with rationale, is in `git log`.
 
+## Requirements
+
+```sh
+sudo apt-get install build-essential linux-headers-$(uname -r) perl patch
+```
+
+`linux-headers-$(uname -r)` must match the running kernel exactly. zlib,
+zstd, lzo, and OpenSSL are vendored and built from source inside
+`vdfs-tools`, so no `-dev` packages are needed for those.
+
 ## Build
 
 **Kernel module:**
 
 ```sh
-cd linux-5.4/fs/vdfs4
+cd linux/fs/vdfs4
 make
 sudo insmod vdfs4.ko
 sudo mount -t vdfs -o dncs /dev/<device-or-loop> <mountpoint>
@@ -33,12 +43,6 @@ Samsung's private key — none of ours are.
 ```sh
 cd vdfs-tools
 make mkfs
-```
-
-This vendors and builds its own zlib/zstd/lzo/OpenSSL (see `Makefile`); you'll
-need `perl`, a C compiler, and the usual build tools. To create a volume:
-
-```sh
 truncate -s 256M image.vdfs4
 ./mkfs.vdfs --root-dir <some-dir> image.vdfs4
 ```
