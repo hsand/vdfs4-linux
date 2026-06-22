@@ -130,7 +130,7 @@ struct vdfs4_bnode {
 	 * Array of pointers to struct page representing pages in
 	 * memory containing data of this bnode
 	 */
-	struct page *pages[0];
+	struct page *pages[];
 };
 
 #define	VDFS4_BNODE_HASH_SIZE_SHIFT 10

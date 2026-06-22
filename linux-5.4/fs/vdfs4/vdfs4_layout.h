@@ -724,7 +724,7 @@ struct vdfs4_raw_btree_head {
 	/** Padding */
 	__u8 padding[2];
 	/** Starting byte of free bnode bitmap, bitmap follows this structure */
-	__u8 bitmap[0];
+	__u8 bitmap[];
 };
 
 /**

@@ -1420,6 +1420,7 @@ static int vdfs4_readpage_comp_inline_data(struct file *file, struct page *page)
 	struct vdfs4_comp_inline_data_info *comp_info =
 				&inode_info->comp_inline_data_info;
 	struct page **pages = NULL;
+	bool *pages_scratch = NULL;
 	void *dst = NULL;
 	unsigned long pages_count, i;
 	size_t len;
@@ -1443,8 +1444,12 @@ static int vdfs4_readpage_comp_inline_data(struct file *file, struct page *page)
 
 	/* prepare pagecache */
 	pages = kzalloc(pages_count * sizeof(struct page *), GFP_NOFS);
-	if (!pages)
+	pages_scratch = kzalloc(pages_count * sizeof(bool), GFP_NOFS);
+	if (!pages || !pages_scratch) {
+		kfree(pages);
+		kfree(pages_scratch);
 		return -ENOMEM;
+	}
 
 	for (i = 0; i < pages_count; i++) {
 		if ((pgoff_t)i == page_folio(page)->index) {
@@ -1453,13 +1458,27 @@ static int vdfs4_readpage_comp_inline_data(struct file *file, struct page *page)
 			continue;
 		}
 
-		pages[i] = find_or_create_page(inode->i_mapping,
-				(pgoff_t)i, GFP_NOFS | __GFP_HIGHMEM);
+		/*
+		 * The other pages making up this inline-compressed file
+		 * might be later folios in an outer readahead batch that
+		 * the VFS has already locked and is waiting on us to get
+		 * back to - grab_cache_page_nowait() is documented safe to
+		 * call while holding another page's lock. Fall back to a
+		 * scratch page if the real slot isn't immediately
+		 * available; we just don't get to cache that one this time.
+		 */
+		pages[i] = grab_cache_page_nowait(inode->i_mapping, (pgoff_t)i);
 		if (!pages[i]) {
-			while (i-- > 0) {
-				unlock_page(pages[i]);
-				put_page(pages[i]);
+			pages[i] = alloc_page(GFP_NOFS | __GFP_HIGHMEM);
+			if (pages[i]) {
+				lock_page(pages[i]);
+				pages_scratch[i] = true;
 			}
+		}
+		if (!pages[i]) {
+			while (i-- > 0)
+				vdfs4_release_unpacked_page(pages[i],
+						pages_scratch[i], false);
 
 			VDFS4_WARNING("(NOMEM)(%s) cannot alloc page for comp inline\n",
 				      get_sid_from_inode(inode));
@@ -1470,10 +1489,9 @@ static int vdfs4_readpage_comp_inline_data(struct file *file, struct page *page)
 
 	/* Sombody already read it for us */
 	if (PageUptodate(page)) {
-		for (i = 0; i < pages_count; i++) {
-			unlock_page(pages[i]);
-			put_page(pages[i]);
-		}
+		for (i = 0; i < pages_count; i++)
+			vdfs4_release_unpacked_page(pages[i], pages_scratch[i],
+					false);
 
 		ret = 0;
 		goto exit;
@@ -1499,18 +1517,14 @@ static int vdfs4_readpage_comp_inline_data(struct file *file, struct page *page)
 	vm_unmap_ram(dst, pages_count);
 
 exit_unlock_page:
-	for (i = 0; i < pages_count; i++) {
-		if (!ret) {
-			flush_dcache_page(page);
-			SetPageUptodate(pages[i]);
-			mark_page_accessed(pages[i]);
-		}
-		unlock_page(pages[i]);
-		put_page(pages[i]);
-	}
+	if (!ret)
+		flush_dcache_page(page);
+	for (i = 0; i < pages_count; i++)
+		vdfs4_release_unpacked_page(pages[i], pages_scratch[i], !ret);
 
 exit:
 	kfree(pages);
+	kfree(pages_scratch);
 
 	return ret;
 }

@@ -1449,6 +1449,8 @@ int vdfs4_read_chunk(struct page *page, struct page **chunk_pages,
 #endif
 int vdfs4_sw_decomp_vm_init(void);
 void vdfs4_sw_decomp_vm_destroy(void);
+void vdfs4_release_unpacked_page(struct page *page, bool is_scratch,
+		bool mark_uptodate);
 int vdfs4_auth_decompress_sw(struct inode *inode, struct page **chunk_pages,
 		pgoff_t index, struct vdfs4_comp_extent_info *cext,
 		struct page *page);

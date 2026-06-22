@@ -2071,8 +2071,36 @@ int vdfs4_read_chunk(struct page *page, struct page **chunk_pages,
 				goto exit;
 		}
 
-		chunk_pages[count] = find_or_create_page(mapping,
-				(pgoff_t)page_idx, GFP_NOFS | __GFP_HIGHMEM);
+		if (mapping == inode->i_mapping &&
+				(pgoff_t)page_idx == page_folio(page)->index) {
+			/*
+			 * This is the page the VFS handed us; our caller
+			 * already unlocked it before calling us, so it's
+			 * known safe to wait for.
+			 */
+			chunk_pages[count] = find_or_create_page(mapping,
+					(pgoff_t)page_idx,
+					GFP_NOFS | __GFP_HIGHMEM);
+		} else {
+			/*
+			 * Other pages of this chunk's mapping might be later
+			 * folios in an outer readahead batch that the VFS
+			 * has already locked and is waiting on us to get back
+			 * to - grab_cache_page_nowait() is documented safe to
+			 * call while holding another page's lock. Fall back
+			 * to a scratch page if the real slot isn't
+			 * immediately available; we just don't get to cache
+			 * that one this time around.
+			 */
+			chunk_pages[count] = grab_cache_page_nowait(mapping,
+					(pgoff_t)page_idx);
+			if (!chunk_pages[count]) {
+				chunk_pages[count] = alloc_page(
+						GFP_NOFS | __GFP_HIGHMEM);
+				if (chunk_pages[count])
+					lock_page(chunk_pages[count]);
+			}
+		}
 		if (!chunk_pages[count]) {
 			ret = -ENOMEM;
 			VDFS4_WARNING("(NOMEM)(%s) cannot alloc page for read chunk\n",
@@ -2223,7 +2251,7 @@ static inline void vdfs4_sw_decomp_vm_unmap(const void *mem, unsigned int count)
  * allocation loop), so they just need a put_page(); real page-cache slots
  * need the usual Uptodate/unlock/put sequence.
  */
-static void vdfs4_release_unpacked_page(struct page *page, bool is_scratch,
+void vdfs4_release_unpacked_page(struct page *page, bool is_scratch,
 		bool mark_uptodate)
 {
 	if (is_scratch) {
