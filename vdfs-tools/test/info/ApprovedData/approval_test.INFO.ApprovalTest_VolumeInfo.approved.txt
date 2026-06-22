@@ -1,0 +1,61 @@
+test/info/SampleData/systemrw.img' vdfs4_volume_begins information>
+ - mkfs cmdline : mkfs.vdfs -i -V -z 20480K -r /var/tmp/mic-tmp-5qpGBL
+ - mkfs date : 2024.07.01-18:09
+ - mkfs user : Anonymous
+
+<'test/info/SampleData/systemrw.img' vdfs4_super_block information>
+ - max blocks cnt : 5120 (0x1400, 20480 kbyte)
+ - volume name : VDFS4_VOLUME
+ - log blk size(page) : 12 (4096 byte)
+ - log super page size : 14 (16384 byte)
+ - log erase blk size : 21 (2097152 byte)
+ - read only img : NO
+ - img inode cnt : 23
+
+<'test/info/SampleData/systemrw.img' vdfs4_extended_super_block information>
+ - files cnt : 1
+ - folders cnt : 1
+ - volume body : offset(0), length(5114(0x13fa))
+ - mount  cnt : 0
+ - umount cnt : 0
+ - generation : 0
+ - dbg area : offset(2), length(4)
+ - meta total blk cnt : 360
+ - base table : offset(6), length(28(0x1c))
+ - meta 
+   `-  ( 0) begin:0x22 , length:0x168 (unit:block index)
+ - volume blk cnt : 5120 (0x1400)
+ - written : 0 kbytes
+
+<'test/info/SampleData/systemrw.img' Volume Map>
++----------------------------------------+-0
++      volume_begins(1) (len:     0x200) +
++----------------------------------------+-0x200
++      super_block(1-1) (len:     0x200) +
++----------------------------------------+-0x400
++      super_block(1-2) (len:     0x200) +
++----------------------------------------+-0x600
++    ext_super_block(1) (len:     0xa00) +
++----------------------------------------+-0x1000
++      volume_begins(2) (len:     0x200) +
++----------------------------------------+-0x1200
++      super_block(2-1) (len:     0x200) +
++----------------------------------------+-0x1400
++      super_block(2-2) (len:     0x200) +
++----------------------------------------+-0x1600
++    ext_super_block(2) (len:     0xa00) +
++----------------------------------------+-0x2000
++            debug area (len:    0x4000) +
++----------------------------------------+-0x6000
++            base table (len:   0x1c000) +
++----------------------------------------+-0x22000
++             meta area (len:  0x168000) +
++----------------------------------------+-0x18a000
++             data area (len: 0x1276000) +
++----------------------------------------+-0x1400000
+<Summary>
+ * data total size : 18MByte (19357696byte)
+ * meta total size : 1MByte (1474560byte)
+
+
+

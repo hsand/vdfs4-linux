@@ -1,0 +1,7 @@
+test/info/SampleData/testdir' (REG Files)>
+ - file cnt : 5 (normal:5/tuned:0)
+ - total size : 0 byte
+ - tuned total size : org(0byte)/comp(0byte)
+ - total chunk cnt : 0 (comp:0/uncomp:0)
+
+

@@ -1,0 +1,13 @@
+VDFS-INFO]: Read only image
+
+[VDFS-INFO]: Image inodes count 1349
+
+Bnode type: VDFS4_NODE_LEAF
+Node id: 1
+Num of records: 1
+Prev node id: 0
+Next node id: 0
+  Num    Obj id    iblock     begin    length    Offset
+    0         0         0         0         0        32
+[VDFS-INFO]: Finished successfully
+

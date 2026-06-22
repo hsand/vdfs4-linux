@@ -1,0 +1,62 @@
+VDFS-INFO]: Read only image
+
+[VDFS-INFO]: Image inodes count 1349
+
+Bnode type: VDFS4_NODE_INDEX
+Node id: 3
+Num of records: 50
+Prev node id: 0
+Next node id: 0
+  Num    Par id                             Name   Node id    Offset
+    0         0                             root         1        32
+    1         9      db-tvs-sospec-isdb-data.sei        40      1888
+    2         9                          inittab        14       552
+    3         9                           shells         5       164
+    4        20                      smack_apply         2        76
+    5        46                     ld.so.conf.d         4       120
+    6        82                         cert9.db         6       200
+    7       126                       products.d         7       244
+    8       158                        proc.conf         8       288
+    9       192                  appctx-wind.edj         9       332
+   10       222                 tvctx-manager.mo        10       384
+   11       262                            es_MX        11       436
+   12       303                     storage.conf        12       472
+   13       329                                2        13       516
+   14       356                KEDMICOM_PRTV.bin        15       596
+   15       375              scmirroring_src.ini        16       648
+   16       412                  vd_package_defs        17       700
+   17       438                system_service.db        18       752
+   18       443           35-lang-normalize.conf        19       804
+   19       468                 40-nonlatin.conf        20       856
+   20       486        20-unhint-small-vera.conf        21       908
+   21       516                       1377.db.xz        24      1056
+   22       516                        882.db.xz        22       968
+   23       516                    hash_file_811        23      1012
+   24       517                       1335.db.xz        25      1100
+   25       635              upgrade_to_30001.sh        26      1144
+   26       650                libuwa-manager.so        27      1196
+   27       680               .appsvc.db-journal        28      1248
+   28       706         11_notification-add.post        29      1300
+   29       743                           device        30      1360
+   30       772                          network        31      1396
+   31       808              app-boot-manager.mo        32      1440
+   32       848                            nl_NL        33      1492
+   33       887   22_ARK_SmartScreen_0_WrittenOffer.txt        34      1528
+   34       887            23_LFD_KantSU2e_0.png        36      1656
+   35       887          24_DTV_OscarP_AOT_0.png        35      1596
+   36       887     24_SmartMonitor_OscarS_0.png        37      1708
+   37       968   23_DTV_KANTSU2E_REFERENCE_0.png        38      1768
+   38       991              systemd.policy.conf        39      1836
+   39      1019           db-tvs-chms-schema.sei        41      1948
+   40      1042                  net-config.conf        42      2000
+   41      1042                 stc-manager.conf        43      2052
+   42      1094       app-defined-loader.capsign        44      2104
+   43      1118                            libnl        45      2164
+   44      1146                         security        46      2200
+   45      1163                             cyad        49      2324
+   46      1163                             inis        47      2244
+   47      1163                            mdnsd        51      2404
+   48      1163                      request-key        48      2280
+   49      1163                          usermod        50      2360
+[VDFS-INFO]: Finished successfully
+
