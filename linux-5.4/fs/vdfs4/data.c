@@ -108,7 +108,7 @@ static struct bio *__allocate_new_bio(struct block_device *bdev,
 {
 	gfp_t gfp_flags = GFP_NOFS | __GFP_HIGH;
 	struct bio *bio = NULL;
-	sector_t s_count = (sector_t)(bdev->bd_inode->i_size >>
+	sector_t s_count = (sector_t)(bdev_nr_bytes(bdev) >>
 			SECTOR_SIZE_SHIFT);
 	sector_t s_nr_vecs = (sector_t) nr_vecs * SECTOR_PER_PAGE;
 
@@ -116,17 +116,15 @@ static struct bio *__allocate_new_bio(struct block_device *bdev,
 		((first_sector + s_nr_vecs) > s_count))
 		return ERR_PTR(-EFAULT);
 
-	bio = bio_alloc(gfp_flags, nr_vecs);
+	bio = bio_alloc(bdev, nr_vecs, 0, gfp_flags);
 
 	if (bio == NULL && (current->flags & PF_MEMALLOC)) {
 		while (!bio && (nr_vecs /= 2))
-			bio = bio_alloc(gfp_flags, nr_vecs);
+			bio = bio_alloc(bdev, nr_vecs, 0, gfp_flags);
 	}
 
-	if (bio) {
-		bio_set_dev(bio, bdev);
+	if (bio)
 		bio->bi_iter.bi_sector = first_sector;
-	}
 
 	return bio;
 }
@@ -138,7 +136,7 @@ int vdfs4_get_table_sector(struct vdfs4_sb_info *sbi, sector_t iblock,
 	struct vdfs4_layout_sb *l_sb = sbi->raw_superblock;
 	struct vdfs4_extent *extent_table = &l_sb->exsb.tables;
 
-	sector_t max_size = (sector_t)(sbi->sb->s_bdev->bd_inode->i_size >>
+	sector_t max_size = (sector_t)(bdev_nr_bytes(sbi->sb->s_bdev) >>
 			SECTOR_SIZE_SHIFT);
 
 	if (iblock > le64_to_cpu(extent_table->length))
@@ -350,8 +348,8 @@ int vdfs4_table_IO(struct vdfs4_sb_info *sbi, void *buffer,
 	blk_start_plug(&plug);
 
 	do {
-		nr_vectr = (pages_count < BIO_MAX_PAGES) ? pages_count :
-				BIO_MAX_PAGES;
+		nr_vectr = (pages_count < BIO_MAX_VECS) ? pages_count :
+				BIO_MAX_VECS;
 
 		ret = vdfs4_get_table_sector(sbi, *iblock, &start_sector);
 		if (ret)
@@ -473,7 +471,7 @@ int vdfs4_read_pages(struct block_device *bdev,
 
 	struct blk_plug plug;
 
-	if (pages_count > BIO_MAX_PAGES || pages_count == 0) {
+	if (pages_count > BIO_MAX_VECS || pages_count == 0) {
 		VDFS4_ERR("wrong page_count to read : %d", pages_count);
 		return -EINVAL;
 	}
@@ -1136,7 +1134,7 @@ static struct bio *allocate_new_request(struct vdfs4_sb_info *sbi, sector_t
 	sector_t start_sector = start_block << (sbi->block_size_shift -
 			SECTOR_SIZE_SHIFT);
 	struct block_device *bdev = sbi->sb->s_bdev;
-	unsigned int bio_size = (size > BIO_MAX_PAGES) ? BIO_MAX_PAGES : size;
+	unsigned int bio_size = (size > BIO_MAX_VECS) ? BIO_MAX_VECS : size;
 
 	bio = __allocate_new_bio(bdev, start_sector, bio_size);
 
@@ -1384,7 +1382,7 @@ int vdfs4__read(struct inode *inode, int type, struct page **pages,
 	int ret = 0;
 	sector_t last_block = 0, block;
 	struct block_device *bdev = inode->i_sb->s_bdev;
-	sector_t blocks_num = bdev->bd_inode->i_size >> PAGE_SHIFT;
+	sector_t blocks_num = bdev_nr_bytes(bdev) >> PAGE_SHIFT;
 
 	unsigned int blocks_per_page = (unsigned)(1 << (PAGE_SHIFT -
 			sbi->block_size_shift));
@@ -1477,7 +1475,7 @@ int vdfs4_sync_metadata(struct vdfs4_sb_info *sbi)
 	}
 
 	/* Write statistics */
-	if (sb->s_bdev->bd_part) {
+	if (bdev_is_partition(sb->s_bdev)) {
 		u64 kbytes_written = sbi->kbytes_written;
 
 		kbytes_written += BD_PART_WRITTEN(sbi);
@@ -1538,7 +1536,7 @@ int vdfs4_read_comp_pages(struct inode *inode, pgoff_t index,
 			  get_sid_from_inode(inode), type);
 		return -EINVAL;
 	}
-	mapping = inode->i_sb->s_bdev->bd_inode->i_mapping;
+	mapping = inode->i_sb->s_bdev->bd_mapping;
 
 
 	for (count = 0; count < pages_count; count++) {
@@ -2041,7 +2039,7 @@ int vdfs4_read_chunk(struct page *page, struct page **chunk_pages,
 	int ret = 0, count, type = VDFS4_FBASED_READ_C;
 	/* block device inode i_mapping is used to store compressed pages */
 	struct address_space *mapping =
-		inode->i_sb->s_bdev->bd_inode->i_mapping;
+		inode->i_sb->s_bdev->bd_mapping;
 	sector_t start_block = 0;
 
 	ret = __get_chunk_extent(inode_i, comp_extent_idx, cext);
@@ -2590,10 +2588,10 @@ alloc_new:
 	if (boundary_block == 0)
 		VDFS4_BUG(sbi);
 	if (IS_ERR_OR_NULL(bio)) {
-		sector_t s_count = (sector_t)(bdev->bd_inode->i_size >>
+		sector_t s_count = (sector_t)(bdev_nr_bytes(bdev) >>
 							SECTOR_SIZE_SHIFT);
 		sector_t first_sector = (boundary_block << (blkbits - 9));
-		unsigned nr_vecs = BIO_MAX_PAGES;
+		unsigned nr_vecs = BIO_MAX_VECS;
 		unsigned s_nr_vecs = nr_vecs * SECTOR_PER_PAGE;
 
 		if (first_sector + s_nr_vecs > s_count)

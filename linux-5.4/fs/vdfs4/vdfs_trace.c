@@ -15,7 +15,6 @@
 #include <linux/list.h>
 #include <linux/list_sort.h>
 #include <linux/fs.h>
-#include <linux/genhd.h>
 #include <linux/uio.h>
 #include <linux/blk_types.h>
 #include <linux/proc_fs.h>

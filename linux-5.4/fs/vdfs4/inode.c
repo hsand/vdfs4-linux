@@ -802,7 +802,7 @@ static int vdfs4_zeroout_blocks(struct vdfs4_sb_info *sbi,
 
 	/* if size is under 2MiB, try to write explicit zeroes */
 	if (nr_sects <= ((sector_t)(2 * 1024 * 1024) >> SECTOR_SHIFT))
-		flags = BLKDEV_ZERO_AVOID_WRITE_ZEROES;
+		flags = BLKDEV_ZERO_NOFALLBACK;
 
 	ret = blkdev_issue_zeroout(bdev, sector, nr_sects, GFP_NOFS, flags);
 
@@ -1033,7 +1033,7 @@ done:
 	max_blocks = extent.block_count - (__u32)(iblock - extent.iblock);
 	VDFS4_BUG_ON(res_block > extent.first_block + extent.block_count, sbi);
 
-	if (res_block > (sector_t)(sb->s_bdev->bd_inode->i_size >>
+	if (res_block > (sector_t)(bdev_nr_bytes(sb->s_bdev) >>
 				sbi->block_size_shift)) {
 		if (!is_sbi_flag_set(sbi, IS_MOUNT_FINISHED)) {
 			VDFS4_ERR("(%s) Block beyond block bound requested", sb->s_id);
@@ -1136,7 +1136,7 @@ done:
 	max_blocks = extent.block_count - (u32)(iblock - extent.iblock);
 	VDFS4_BUG_ON(res_block > extent.first_block + extent.block_count, sbi);
 
-	if (res_block > (sector_t)(sb->s_bdev->bd_inode->i_size >>
+	if (res_block > (sector_t)(bdev_nr_bytes(sb->s_bdev) >>
 				sbi->block_size_shift)) {
 		if (!is_sbi_flag_set(sbi, IS_MOUNT_FINISHED)) {
 			VDFS4_ERR("(%s) Block beyond block bound requested", sb->s_id);

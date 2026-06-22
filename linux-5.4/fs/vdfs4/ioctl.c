@@ -24,9 +24,9 @@
 #include <linux/compat.h>
 #include <linux/version.h>
 #include <linux/file.h>
-#include <../fs/internal.h>
 #include <linux/namei.h>
 #include <linux/buffer_head.h>
+#include <linux/vmalloc.h>
 
 static int vdfs4_set_type_status(struct vdfs4_inode_info *inode_i,
 		unsigned int status)

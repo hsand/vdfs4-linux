@@ -32,6 +32,8 @@
 #include <linux/wait.h>
 #include <linux/pagemap.h>
 #include <linux/pagevec.h>
+#include <linux/blkdev.h>
+#include <linux/part_stat.h>
 #include <linux/completion.h>
 #include <linux/version.h>
 #include <linux/list.h>
@@ -547,7 +549,7 @@ struct vdfs4_sb_info {
  * and the return value is in kbytes. s is of struct vdfs_sb_info.
  */
 #define BD_PART_WRITTEN(s)					\
-(((u64)part_stat_read(s->sb->s_bdev->bd_part, sectors[1]) -	\
+(((u64)part_stat_read(s->sb->s_bdev, sectors[1]) -		\
 	s->sectors_written_start) >> 1)
 
 #ifdef CONFIG_VDFS4_SQUEEZE_PROFILING

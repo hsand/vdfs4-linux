@@ -27,7 +27,6 @@
 #include <linux/buffer_head.h>
 #include <linux/crc32.h>
 #include <linux/version.h>
-#include <linux/genhd.h>
 #include <linux/exportfs.h>
 #include <linux/vmalloc.h>
 #include <linux/writeback.h>
@@ -1358,9 +1357,9 @@ static int vdfs4_extended_sb_read(struct super_block *sb)
 		sbi->folders_count = le64_to_cpu(exsb->folders_count);
 
 		/* For write statistics */
-		if (sb->s_bdev->bd_part)
+		if (bdev_is_partition(sb->s_bdev))
 			sbi->sectors_written_start =
-				(u64)part_stat_read(sb->s_bdev->bd_part, sectors[1]);
+				(u64)part_stat_read(sb->s_bdev, sectors[1]);
 
 		sbi->kbytes_written =
 			le64_to_cpu(exsb->kbytes_written);
@@ -1382,7 +1381,7 @@ static int vdfs4_check_resize_volume(struct super_block *sb)
 	sbi->volume_blocks_count = le64_to_cpu(exsb->volume_blocks_count);
 
 	disk_blocks = (unsigned long long)
-			(sb->s_bdev->bd_inode->i_size >> sb->s_blocksize_bits);
+			(bdev_nr_bytes(sb->s_bdev) >> sb->s_blocksize_bits);
 
 	if (sbi->volume_blocks_count > disk_blocks) {
 		VDFS4_ERR("(%s): filesystem bigger than disk:%llu > %llu blocks",
@@ -1949,7 +1948,7 @@ static ssize_t vdfs4_lifetime_write_kbytes(struct vdfs4_sb_info *sbi, char *buf)
 {
 	struct super_block *sb = sbi->sb;
 
-	if (!sb->s_bdev->bd_part)
+	if (!bdev_is_partition(sb->s_bdev))
 		return snprintf(buf, PAGE_SIZE, "0\n");
 
 	return snprintf(buf, PAGE_SIZE, "%llu\n",
@@ -2023,7 +2022,6 @@ static int vdfs4_fill_super(struct super_block *sb, void *data, int silent)
 	int ret	= 0;
 	struct vdfs4_sb_info *sbi;
 	struct inode *root_inode;
-	char bdev_name[BDEVNAME_SIZE];
 	struct vdfs4_layout_sb *l_sb = NULL;
 	struct vdfs4_extended_super_block *exsb = NULL;
 	struct timespec64 ts;
@@ -2036,11 +2034,11 @@ static int vdfs4_fill_super(struct super_block *sb, void *data, int silent)
 		return -ENXIO;
 	if (!sb->s_bdev)
 		return -ENXIO;
-	if (!sb->s_bdev->bd_part)
+	if (!sb->s_bdev->bd_disk)
 		return -ENXIO;
 
 	VDFS4_NOTICE("mount \"%s\" (%s)\n",
-		VDFS4_VERSION, bdevname(sb->s_bdev, bdev_name));
+		VDFS4_VERSION, sb->s_id);
 	trace_early_message("vdfs4 Mount - Start");
 
 	sbi = kzalloc(sizeof(*sbi), GFP_NOFS);
@@ -2074,7 +2072,7 @@ static int vdfs4_fill_super(struct super_block *sb, void *data, int silent)
 	ret = vdfs4_parse_options(sb, data);
 	if (ret) {
 		VDFS4_ERR("unable to parse mount options(%s,ret:%d)\n",
-					bdevname(sb->s_bdev, bdev_name), ret);
+					sb->s_id, ret);
 		ret = -EINVAL;
 		goto vdfs4_parse_options_error;
 	}
@@ -2082,7 +2080,7 @@ static int vdfs4_fill_super(struct super_block *sb, void *data, int silent)
 	ret = vdfs4_volume_check(sb);
 	if (ret) {
 		VDFS4_DEBUG_TMP("volume check error (%s,ret:%d)\n",
-					bdevname(sb->s_bdev, bdev_name), ret);
+					sb->s_id, ret);
 		goto not_vdfs4_volume;
 	}
 
@@ -2090,17 +2088,17 @@ static int vdfs4_fill_super(struct super_block *sb, void *data, int silent)
 	if (ret) {
 		if (ret == -ENOMEM)
 			VDFS4_WARNING("sb read error (%s,ret:%d)\n",
-				      bdevname(sb->s_bdev, bdev_name), ret);
+				      sb->s_id, ret);
 		else
 			VDFS4_ERR("sb read error (%s,ret:%d)\n",
-				  bdevname(sb->s_bdev, bdev_name), ret);
+				  sb->s_id, ret);
 		goto vdfs4_sb_read_error;
 	}
 
 	ret = vdfs4_extended_sb_read(sb);
 	if (ret) {
 		VDFS4_ERR("extended sb read error (%s,ret:%d)\n",
-					bdevname(sb->s_bdev, bdev_name), ret);
+					sb->s_id, ret);
 		goto vdfs4_extended_sb_read_error;
 	}
 
@@ -2111,14 +2109,14 @@ static int vdfs4_fill_super(struct super_block *sb, void *data, int silent)
 	ret = vdfs4_debugarea_check(sbi);
 	if (ret) {
 		VDFS4_ERR("debug area check error (%s,ret:%d)\n",
-					bdevname(sb->s_bdev, bdev_name), ret);
+					sb->s_id, ret);
 		goto vdfs4_extended_sb_read_error;
 	}
 
 	ret = vdfs4_check_resize_volume(sb);
 	if (ret) {
 		VDFS4_ERR("check resize volume error (%s,ret:%d)\n",
-					bdevname(sb->s_bdev, bdev_name), ret);
+					sb->s_id, ret);
 		goto vdfs4_extended_sb_read_error;
 	}
 
@@ -2139,10 +2137,10 @@ static int vdfs4_fill_super(struct super_block *sb, void *data, int silent)
 		if (ret) {
 			if (ret == -ENOMEM)
 				VDFS4_WARNING("meta hashtable read error (%s,ret:%d)\n",
-					      bdevname(sb->s_bdev, bdev_name), ret);
+					      sb->s_id, ret);
 			else
 				VDFS4_ERR("meta hashtable read error (%s,ret:%d)\n",
-					  bdevname(sb->s_bdev, bdev_name), ret);
+					  sb->s_id, ret);
 			goto vdfs4_extended_sb_read_error;
 		}
 	}
@@ -2170,10 +2168,10 @@ static int vdfs4_fill_super(struct super_block *sb, void *data, int silent)
 	if (ret) {
 		if (ret == -ENOMEM)
 			VDFS4_WARNING("snapshot build error (%s,ret:%d)\n",
-				      bdevname(sb->s_bdev, bdev_name), ret);
+				      sb->s_id, ret);
 		else
 			VDFS4_ERR("snapshot build error (%s,ret:%d)\n",
-				  bdevname(sb->s_bdev, bdev_name), ret);
+				  sb->s_id, ret);
 		goto vdfs4_build_snapshot_manager_error;
 	}
 
@@ -2182,10 +2180,10 @@ static int vdfs4_fill_super(struct super_block *sb, void *data, int silent)
 		if (ret) {
 			if (ret == -ENOMEM)
 				VDFS4_WARNING("fsm build error (%s,ret:%d)\n",
-					  bdevname(sb->s_bdev, bdev_name), ret);
+					  sb->s_id, ret);
 			else
 				VDFS4_ERR("fsm build error (%s,ret:%d)\n",
-					  bdevname(sb->s_bdev, bdev_name), ret);
+					  sb->s_id, ret);
 			goto vdfs4_fsm_create_error;
 		}
 	}
@@ -2193,21 +2191,21 @@ static int vdfs4_fill_super(struct super_block *sb, void *data, int silent)
 	ret = vdfs4_fill_ext_tree(sbi);
 	if (ret) {
 		VDFS4_ERR("ext tree fill error (%s,ret:%d)\n",
-					bdevname(sb->s_bdev, bdev_name), ret);
+					sb->s_id, ret);
 		goto vdfs4_fill_ext_tree_error;
 	}
 
 	ret = vdfs4_fill_cat_tree(sbi);
 	if (ret) {
 		VDFS4_ERR("cat tree fill error (%s,ret:%d)\n",
-					bdevname(sb->s_bdev, bdev_name), ret);
+					sb->s_id, ret);
 		goto vdfs4_fill_cat_tree_error;
 	}
 
 	ret = vdsf_fill_xattr_tree(sbi);
 	if (ret) {
 		VDFS4_ERR("xattr tree fill error (%s,ret:%d)\n",
-					bdevname(sb->s_bdev, bdev_name), ret);
+					sb->s_id, ret);
 		goto vdfs4_fill_xattr_tree_error;
 	}
 
@@ -2215,7 +2213,7 @@ static int vdfs4_fill_super(struct super_block *sb, void *data, int silent)
 		ret = build_free_inode_bitmap(sbi);
 		if (ret) {
 			VDFS4_ERR("inode bitmap build error (%s,ret:%d)\n",
-						bdevname(sb->s_bdev, bdev_name), ret);
+						sb->s_id, ret);
 			goto build_free_inode_bitmap_error;
 		}
 	}
@@ -2224,7 +2222,7 @@ static int vdfs4_fill_super(struct super_block *sb, void *data, int silent)
 	root_inode = vdfs4_get_root_inode(sbi->catalog_tree);
 	if (IS_ERR(root_inode)) {
 		VDFS4_ERR("failed to load root directory(%s)\n",
-					bdevname(sb->s_bdev, bdev_name));
+					sb->s_id);
 		ret = PTR_ERR(root_inode);
 		goto vdfs4_iget_err;
 	}
@@ -2232,7 +2230,7 @@ static int vdfs4_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_root = d_make_root(root_inode);
 	if (!sb->s_root) {
 		VDFS4_ERR("unable to get root inode(%s)\n",
-					bdevname(sb->s_bdev, bdev_name));
+					sb->s_id);
 		ret = -EINVAL;
 		goto d_alloc_root_err;
 	}
@@ -2261,7 +2259,7 @@ static int vdfs4_fill_super(struct super_block *sb, void *data, int silent)
 		ret = vdfs4_process_orphan_inodes(sbi);
 		if (ret) {
 			VDFS4_ERR("process orphan inodes error (%s,ret:%d)\n",
-				  bdevname(sb->s_bdev, bdev_name), ret);
+				  sb->s_id, ret);
 			destroy_layout(sbi);
 			goto process_orphan_inodes_error;
 		}
@@ -2278,7 +2276,7 @@ static int vdfs4_fill_super(struct super_block *sb, void *data, int silent)
 				   "%s", sb->s_id);
 	if (ret) {
 		VDFS4_ERR("kobject init/add error (%s,ret:%d)\n",
-					bdevname(sb->s_bdev, bdev_name), ret);
+					sb->s_id, ret);
 		goto process_orphan_inodes_error;
 	}
 
@@ -2320,7 +2318,7 @@ static int vdfs4_fill_super(struct super_block *sb, void *data, int silent)
 	free_blocks = VDFS4_GET_FREE_BLOCKS_COUNT(sbi);
 	trace_early_message("vdfs4 Mount - Finish");
 	VDFS4_NOTICE("mounted %s (Size:%lluMiB, Avail:%lluMiB)\n",
-		     bdevname(sb->s_bdev, bdev_name),
+		     sb->s_id,
 		     volume_blocks >> (20 - sbi->block_size_shift),
 		     free_blocks >> (20 - sbi->block_size_shift));
 	return 0;

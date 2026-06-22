@@ -19,6 +19,7 @@
  * USA.
  */
 
+#include <linux/vmalloc.h>
 #include "vdfs4.h"
 #include "debug.h"
 
@@ -330,7 +331,6 @@ static int _get_crash_val(void *debug_area, uint32_t *crash_val)
 static unsigned int _print_volume_verification(
 		struct vdfs4_sb_info *sbi, void *debug_area)
 {
-	char bdev_name[BDEVNAME_SIZE];
 	struct vdfs_dbg_area_map *map =
 		(struct vdfs_dbg_area_map *)debug_area;
 	unsigned int result;
@@ -344,33 +344,33 @@ static unsigned int _print_volume_verification(
 		memcmp(map->magic, VDFS_DBG_AREA_MAGIC,
 		sizeof(VDFS_DBG_AREA_MAGIC) - 1)) {
 		VDFS4_WARNING("%s wrong magic or volume verification info (0x%x)\n",
-			bdevname(sbi->sb->s_bdev, bdev_name), result);
+			sbi->sb->s_id, result);
 		return result;
 	}
 
 	switch (result) {
 	case VDFS_DBG_VERIFY_MKFS:
 		VDFS4_NOTICE("%s volume mkfs on disk.\n",
-			bdevname(sbi->sb->s_bdev, bdev_name));
+			sbi->sb->s_id);
 		break;
 	case VDFS_DBG_VERIFY_START:
 		/* It was stopped while seret update. */
 		VDFS4_ERR("%s volume was stoped while updating.\n",
-			bdevname(sbi->sb->s_bdev, bdev_name));
+			sbi->sb->s_id);
 		break;
 	case VDFS_DBG_VERIFY_FAIL:
 		/* It used crc mismatch image file. */
 		VDFS4_ERR("%s was updated with invalid(crc mismatch) vdfs image.\n",
-			bdevname(sbi->sb->s_bdev, bdev_name));
+			sbi->sb->s_id);
 		break;
 	case VDFS_DBG_VERIFY_NODATA:
 		/* no data case (ex>otp,swu,dd,success update in seret, etc... */
 		VDFS4_NOTICE("%s update success or no volume verification info\n",
-			bdevname(sbi->sb->s_bdev, bdev_name));
+			sbi->sb->s_id);
 		break;
 	default:
 		VDFS4_WARNING("%s wrong volume verification info (0x%x)\n",
-			bdevname(sbi->sb->s_bdev, bdev_name), result);
+			sbi->sb->s_id, result);
 		break;
 	}
 
@@ -386,7 +386,6 @@ void vdfs4_print_volume_verification(struct vdfs4_sb_info *sbi)
 {
 	int rtn;
 	uint32_t err_cnt = 0;
-	char bdev_name[BDEVNAME_SIZE];
 	struct page **debug_pages = NULL;
 	int page_count = 0;
 	void *debug_area = NULL;
@@ -398,10 +397,10 @@ void vdfs4_print_volume_verification(struct vdfs4_sb_info *sbi)
 	if (rtn) {
 		if (rtn == -ENOMEM)
 			VDFS4_WARNING("Failed to read %s debug area.(rtn:%d)\n",
-				  bdevname(sbi->sb->s_bdev, bdev_name), rtn);
+				  sbi->sb->s_id, rtn);
 		else
 			VDFS4_ERR("Failed to read %s debug area.(rtn:%d)\n",
-				  bdevname(sbi->sb->s_bdev, bdev_name), rtn);
+				  sbi->sb->s_id, rtn);
 		return;
 	}
 
@@ -410,10 +409,10 @@ void vdfs4_print_volume_verification(struct vdfs4_sb_info *sbi)
 	rtn = _get_err_count(debug_area, &err_cnt);
 	if (rtn)
 		VDFS4_ERR("Failed to get '%s' volume err count.(rtn:%d)\n",
-			bdevname(sbi->sb->s_bdev, bdev_name), rtn);
+			sbi->sb->s_id, rtn);
 	if (err_cnt)
 		VDFS4_ERR("%s volume have error count (err_cnt:%u)\n",
-			  bdevname(sbi->sb->s_bdev, bdev_name), err_cnt);
+			  sbi->sb->s_id, err_cnt);
 
 	_free_debug_area(debug_pages, page_count, debug_area);
 }
@@ -428,7 +427,6 @@ void vdfs4_print_volume_verification(struct vdfs4_sb_info *sbi)
 int vdfs4_debug_get_err_count(struct vdfs4_sb_info *sbi, uint32_t *err_count)
 {
 	int rtn;
-	char bdev_name[BDEVNAME_SIZE];
 	struct page **debug_pages = NULL;
 	int page_count = 0;
 	void *debug_area = NULL;
@@ -439,10 +437,10 @@ int vdfs4_debug_get_err_count(struct vdfs4_sb_info *sbi, uint32_t *err_count)
 	if (rtn) {
 		if (rtn == -ENOMEM)
 			VDFS4_WARNING("Failed to load %s debug area.(rtn:%d)\n",
-				      bdevname(sbi->sb->s_bdev, bdev_name), rtn);
+				      sbi->sb->s_id, rtn);
 		else
 			VDFS4_ERR("Failed to load %s debug area.(rtn:%d)\n",
-				  bdevname(sbi->sb->s_bdev, bdev_name), rtn);
+				  sbi->sb->s_id, rtn);
 		return rtn;
 	}
 	rtn = _get_err_count(sbi, err_count);
@@ -458,7 +456,6 @@ int vdfs4_debug_get_err_count(struct vdfs4_sb_info *sbi, uint32_t *err_count)
 int vdfs4_debugarea_check(struct vdfs4_sb_info *sbi)
 {
 	int rtn;
-	char bdev_name[BDEVNAME_SIZE];
 	struct page **debug_pages = NULL;
 	unsigned int result;
 	int page_count = 0;
@@ -474,10 +471,10 @@ int vdfs4_debugarea_check(struct vdfs4_sb_info *sbi)
 	if (rtn) {
 		if (rtn == -ENOMEM)
 			VDFS4_WARNING("Failed to load %s debug area.(rtn:%d)\n",
-				      bdevname(sbi->sb->s_bdev, bdev_name), rtn);
+				      sbi->sb->s_id, rtn);
 		else
 			VDFS4_ERR("Failed to load %s debug area.(rtn:%d)\n",
-				  bdevname(sbi->sb->s_bdev, bdev_name), rtn);
+				  sbi->sb->s_id, rtn);
 		/* return 0 as no problem */
 		return 0;
 	}
@@ -487,7 +484,7 @@ int vdfs4_debugarea_check(struct vdfs4_sb_info *sbi)
 	/* improperly update finished */
 	if (result == VDFS_DBG_VERIFY_START || result == VDFS_DBG_VERIFY_FAIL) {
 		VDFS4_ERR("%s image update or format was not finished completely\n",
-			bdevname(sbi->sb->s_bdev, bdev_name));
+			sbi->sb->s_id);
 		_free_debug_area(debug_pages, page_count, debug_area);
 		return -EINVAL;
 	}
@@ -498,7 +495,7 @@ int vdfs4_debugarea_check(struct vdfs4_sb_info *sbi)
 	_get_crash_val(debug_area, &crash_val);
 	if (unlikely(crash_val >= 100)) {
 		VDFS4_ERR("%s crash_val (%d) is bigger than 100\n",
-			bdevname(sbi->sb->s_bdev, bdev_name), crash_val);
+			sbi->sb->s_id, crash_val);
 		rtn = -EINVAL;
 	}
 #endif
@@ -631,7 +628,6 @@ int vdfs4_record_err_dump_disk(struct vdfs4_sb_info *sbi,
 	const uint8_t *note, void *extra_buf, size_t extra_len)
 {
 	int rtn;
-	char bdev_name[BDEVNAME_SIZE];
 	struct page **debug_pages = NULL;
 	int page_count = 0;
 	void *debug_area = NULL;
@@ -652,10 +648,10 @@ int vdfs4_record_err_dump_disk(struct vdfs4_sb_info *sbi,
 	if (rtn) {
 		if (rtn == -ENOMEM)
 			VDFS4_WARNING("Failed to load %s debug area.(rtn:%d)\n",
-				      bdevname(sbi->sb->s_bdev, bdev_name), rtn);
+				      sbi->sb->s_id, rtn);
 		else
 			VDFS4_ERR("Failed to load %s debug area.(rtn:%d)\n",
-				  bdevname(sbi->sb->s_bdev, bdev_name), rtn);
+				  sbi->sb->s_id, rtn);
 		return rtn;
 	}
 
@@ -665,10 +661,10 @@ int vdfs4_record_err_dump_disk(struct vdfs4_sb_info *sbi,
 	rtn = _get_err_count(debug_area, &err_cnt);
 	if (rtn)
 		VDFS4_ERR("Failed to get '%s' volume err count.(rtn:%d)\n",
-			bdevname(sbi->sb->s_bdev, bdev_name), rtn);
+			sbi->sb->s_id, rtn);
 	if (err_cnt)
 		VDFS4_ERR("%s volume have error count (err_cnt:%u)\n",
-			  bdevname(sbi->sb->s_bdev, bdev_name), err_cnt);
+			  sbi->sb->s_id, err_cnt);
 
 
 	/* 2. record error info into debug area */
@@ -676,7 +672,7 @@ int vdfs4_record_err_dump_disk(struct vdfs4_sb_info *sbi,
 				debug_pages, debug_area);
 	if (rtn) {
 		VDFS4_ERR("Failed to put %s err_info(rtn:%d)\n",
-			bdevname(sbi->sb->s_bdev, bdev_name), rtn);
+			sbi->sb->s_id, rtn);
 		rtn = -EINVAL;
 		goto dump_err;
 	}

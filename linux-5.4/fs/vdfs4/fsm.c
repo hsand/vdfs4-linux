@@ -648,7 +648,7 @@ static void fsm_delayed_discard(struct vdfs4_sb_info *sbi)
 		sum_sects += nr_sects;
 
 		err = blkdev_issue_discard(sbi->sb->s_bdev, sector, nr_sects,
-					   GFP_NOFS, 0);
+					   GFP_NOFS);
 
 		VDFS4_INFO("discard %10s : %2d %4d %8llu %4llu\n",
 			   get_sid_from_sbi(sbi), err, i,

@@ -1138,7 +1138,7 @@ static __u32 get_minimal_meta_expand_step(struct vdfs4_sb_info *sbi)
  */
 static __u32 calculate_expand_step(struct vdfs4_sb_info *sbi)
 {
-	loff_t volume_size = sbi->sb->s_bdev->bd_inode->i_size;
+	loff_t volume_size = bdev_nr_bytes(sbi->sb->s_bdev);
 	__u32 minimal_expand_step = get_minimal_meta_expand_step(sbi);
 	__u32 expand_step;
 	char is_volume_small;
