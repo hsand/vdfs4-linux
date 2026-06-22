@@ -314,18 +314,6 @@ static inline int cmp_2_le64(__le64 a, __le64 b)
  * current folio API instead of folio-ifying every call site.
  */
 
-/* find_or_create_page() was folded into the folio API and removed. */
-static inline struct page *find_or_create_page(struct address_space *mapping,
-		pgoff_t index, gfp_t gfp_mask)
-{
-	struct folio *folio = __filemap_get_folio(mapping, index,
-			FGP_LOCK | FGP_ACCESSED | FGP_CREAT, gfp_mask);
-
-	if (IS_ERR(folio))
-		return NULL;
-	return &folio->page;
-}
-
 /*
  * struct pagevec / pagevec_*() were replaced kernel-wide by
  * struct folio_batch. Reintroduce the old page-array pagevec API
