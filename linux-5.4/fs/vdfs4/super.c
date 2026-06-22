@@ -37,6 +37,7 @@
 #include <linux/blkdev.h>
 #include <linux/crypto.h>
 #include <linux/random.h>
+#include <linux/fs_context.h>
 
 #include "vdfs4_layout.h"
 #include "vdfs4.h"
@@ -401,7 +402,7 @@ int vdfs4_sync_fs(struct super_block *sb, int wait)
 		struct inode *inode = &inode_i->vfs_inode;
 		struct address_space *mapping = inode->i_mapping;
 
-		if (!(inode->i_state & (I_FREEING|I_WILL_FREE|I_NEW))
+		if (!(inode_state_read_once(inode) & (I_FREEING|I_WILL_FREE|I_NEW))
 		    && mapping->nrpages != 0)
 			continue;
 
@@ -479,16 +480,12 @@ static void vdfs4_delayed_prof_write(struct work_struct *work)
 				prof_data.ino, prof_data.block);
 
 			if (strlen(buf)) {
-				mm_segment_t fs = get_fs();
-
-				set_fs(KERNEL_DS);
 				pos = file_inode(sbi->prof_file)->i_size;
-				written = vfs_write(sbi->prof_file, (char *)&buf,
+				written = kernel_write(sbi->prof_file, (char *)&buf,
 							strlen(buf), &pos);
 				if (written < 0)
 					VDFS4_ERR("(%s) cannot write to file err:%zd",
 						  sb->s_id, written);
-				set_fs(fs);
 			}
 		} while (size);
 
@@ -680,7 +677,7 @@ static void vdfs4_evict_inode(struct inode *inode)
 		goto no_delete;
 
 	if (VDFS4_I(inode)->record_type == VDFS4_CATALOG_UNPACK_INODE) {
-		inode->i_state = I_FREEING | I_CLEAR;
+		inode_state_assign_raw(inode, I_FREEING | I_CLEAR);
 		trace_vdfs4_evict_inode_exit(inode, 1);
 		VT_FINISH(vt_data);
 		return;
@@ -774,7 +771,6 @@ static struct super_operations vdfs4_sops = {
 	.freeze_fs	= vdfs4_freeze,
 	.statfs		= vdfs4_statfs,
 	.umount_begin	= vdfs4_umount_begin,
-	.remount_fs	= vdfs4_remount_fs,
 	.show_options	= vdfs4_show_options,
 	.evict_inode	= vdfs4_evict_inode,
 };
@@ -1994,6 +1990,7 @@ static struct attribute *vdfs4_attrs[] = {
 	&vdfs4_attr_err_count.attr,
 	NULL,
 };
+ATTRIBUTE_GROUPS(vdfs4);
 static void vdfs4_sb_release(struct kobject *kobj)
 {
 	struct vdfs4_sb_info *sbi = container_of(kobj, struct vdfs4_sb_info,
@@ -2002,23 +1999,34 @@ static void vdfs4_sb_release(struct kobject *kobj)
 }
 static struct kobj_type vdfs4_ktype = {
 	.release = vdfs4_sb_release,
-	.default_attrs = vdfs4_attrs,
+	.default_groups = vdfs4_groups,
 	.sysfs_ops     = &vdfs4_attr_ops,
 };
 
 /*End Sys*/
 
+/*
+ * Per-mount-attempt context, see vdfs4_parse_monolithic() below for why
+ * this just wraps the raw legacy options string.
+ */
+struct vdfs4_fs_context {
+	char *options;
+};
+
 /**
  * @brief			Initialize the eMMCFS filesystem.
  * @param [in,out]	sb	The VFS superblock
- * @param [in,out]	data	FS private information
- * @param [in]		silent	Flag whether to print error message
+ * @param [in,out]	fc	The mount's fs_context (carries the raw
+ *				mount options string and proposed sb flags)
  * @remark			Reads super block and FS internal data
  *				structures for futher use.
  * @return			Return 0 on success, errno on failure
  */
-static int vdfs4_fill_super(struct super_block *sb, void *data, int silent)
+static int vdfs4_fill_super(struct super_block *sb, struct fs_context *fc)
 {
+	struct vdfs4_fs_context *vdfs4_fc = fc->fs_private;
+	void *data = vdfs4_fc->options;
+	int silent = fc->sb_flags & SB_SILENT;
 	int ret	= 0;
 	struct vdfs4_sb_info *sbi;
 	struct inode *root_inode;
@@ -2378,25 +2386,77 @@ not_vdfs4_volume:
 }
 
 
-/**
- * @brief				Method to get the eMMCFS super block.
- * @param [in,out]	fs_type		Describes the eMMCFS file system
- * @param [in]		flags		Input flags
- * @param [in]		dev_name	Block device name
- * @param [in,out]	data		Private information
- * @param [in,out]	mnt		Mounted eMMCFS filesystem information
- * @return				Returns 0 on success, errno on failure
+/*
+ * Per-mount-attempt context. The legacy mount(2) API handed filesystems a
+ * single raw "-o ..." options string at fill_super() time; the fs_context
+ * API instead parses options up front and only calls get_tree() once
+ * everything is ready. vdfs4_parse_options() already does its own
+ * tokenising of that raw string, so rather than rewriting it onto the
+ * fs_parameter/.parse_param machinery, just hang on to a copy of the
+ * string here and hand it to vdfs4_parse_options() unchanged from
+ * vdfs4_fill_super().
  */
-static struct dentry *vdfs4_mount(struct file_system_type *fs_type, int flags,
-				const char *device_name, void *data)
+static int vdfs4_parse_monolithic(struct fs_context *fc, void *data)
 {
-	struct dentry *ret;
+	struct vdfs4_fs_context *vdfs4_fc = fc->fs_private;
+	char *options;
+
+	if (!data)
+		return 0;
+
+	options = kstrdup(data, GFP_KERNEL);
+	if (!options)
+		return -ENOMEM;
+
+	kfree(vdfs4_fc->options);
+	vdfs4_fc->options = options;
+	return 0;
+}
+
+static int vdfs4_get_tree(struct fs_context *fc)
+{
+	int ret;
 
 	VT_PREPARE_PARAM(vt_data);
-	VT_FSTYPE_START(vt_data, vdfs_trace_fstype_mount, (char *)device_name);
-	ret = mount_bdev(fs_type, flags, device_name, data, vdfs4_fill_super);
+	VT_FSTYPE_START(vt_data, vdfs_trace_fstype_mount, (char *)fc->source);
+	ret = get_tree_bdev(fc, vdfs4_fill_super);
 	VT_FINISH(vt_data);
 	return ret;
+}
+
+static int vdfs4_reconfigure(struct fs_context *fc)
+{
+	return vdfs4_remount_fs(fc->root->d_sb, (int *)&fc->sb_flags, NULL);
+}
+
+static void vdfs4_fc_free(struct fs_context *fc)
+{
+	struct vdfs4_fs_context *vdfs4_fc = fc->fs_private;
+
+	if (vdfs4_fc) {
+		kfree(vdfs4_fc->options);
+		kfree(vdfs4_fc);
+	}
+}
+
+static const struct fs_context_operations vdfs4_context_ops = {
+	.parse_monolithic	= vdfs4_parse_monolithic,
+	.get_tree		= vdfs4_get_tree,
+	.reconfigure		= vdfs4_reconfigure,
+	.free			= vdfs4_fc_free,
+};
+
+static int vdfs4_init_fs_context(struct fs_context *fc)
+{
+	struct vdfs4_fs_context *vdfs4_fc = kzalloc(sizeof(*vdfs4_fc),
+			GFP_KERNEL);
+
+	if (!vdfs4_fc)
+		return -ENOMEM;
+
+	fc->fs_private = vdfs4_fc;
+	fc->ops = &vdfs4_context_ops;
+	return 0;
 }
 
 static void vdfs4_kill_block_super(struct super_block *sb)
@@ -2410,7 +2470,7 @@ static void vdfs4_kill_block_super(struct super_block *sb)
 static struct file_system_type vdfs4_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= VDFS4_NAME,
-	.mount		= vdfs4_mount,
+	.init_fs_context = vdfs4_init_fs_context,
 	.kill_sb	= vdfs4_kill_block_super,
 	.fs_flags	= FS_REQUIRES_DEV,
 };

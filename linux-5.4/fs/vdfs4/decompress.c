@@ -254,21 +254,42 @@ static int _unpack_chunk_zlib_gzip(void *src, void *dst, size_t offset,
 }
 
 #ifdef CONFIG_ZSTD_DECOMPRESS
+/*
+ * The raw ZSTD_decompress()/ZSTD_getErrorString() libzstd entry points
+ * declared by linux/zstd_lib.h are compiled into vmlinux but not
+ * exported to modules on this kernel - only the workspace-based
+ * zstd_*_dctx() wrapper API (linux/zstd.h's own lowercase functions) is.
+ */
 int vdfs4_unpack_chunk_zstd(void *src, void *dst, size_t offset,
 		size_t len_bytes, size_t chunk_size)
 {
-	size_t out_len;
+	size_t out_len, workspace_size;
+	void *workspace;
+	zstd_dctx *dctx;
+	int ret = 0;
 
-	out_len = ZSTD_decompress(dst, chunk_size,
-				  (char *)src + offset, len_bytes);
-	if (ZSTD_isError(out_len)) {
-		VDFS4_ERR("ZSTD decomp error(%s,off:%zu,len:%zu,olen:%zu)\n",
-			  ZSTD_getErrorString(ZSTD_getErrorCode(out_len)),
-			  offset, len_bytes, chunk_size);
-		return -EFAULT;
+	workspace_size = zstd_dctx_workspace_bound();
+	workspace = vdfs4_vmalloc((unsigned long)workspace_size);
+	if (!workspace)
+		return -ENOMEM;
+
+	dctx = zstd_init_dctx(workspace, workspace_size);
+	if (!dctx) {
+		vfree(workspace);
+		return -ENOMEM;
 	}
 
-	return 0;
+	out_len = zstd_decompress_dctx(dctx, dst, chunk_size,
+				  (char *)src + offset, len_bytes);
+	if (zstd_is_error(out_len)) {
+		VDFS4_ERR("ZSTD decomp error(%s,off:%zu,len:%zu,olen:%zu)\n",
+			  zstd_get_error_name(out_len),
+			  offset, len_bytes, chunk_size);
+		ret = -EFAULT;
+	}
+
+	vfree(workspace);
+	return ret;
 }
 #else
 int vdfs4_unpack_chunk_zstd(void *src, void *dst, size_t offset,

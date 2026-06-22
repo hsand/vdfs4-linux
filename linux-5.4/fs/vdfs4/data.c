@@ -58,7 +58,6 @@ static void end_io_write(struct bio *bio)
 		prefetchw(&page->flags);
 
 		if (bio->bi_status) {
-			SetPageError(page);
 			if (page->mapping)
 				set_bit(AS_EIO, &page->mapping->flags);
 		}
@@ -89,7 +88,6 @@ static void read_end_io(struct bio *bio)
 			SetPageUptodate(page);
 		} else {
 			ClearPageUptodate(page);
-			SetPageError(page);
 		}
 	}
 	complete(wait);
@@ -309,13 +307,13 @@ static void table_end_IO(struct bio *bio)
 	struct page *page;
 	struct bio_vec *bv;
 	struct bvec_iter_all iter_all;
+	atomic_t *io_error = bio->bi_private;
+
+	if (bio->bi_status && io_error)
+		atomic_set(io_error, 1);
 
 	bio_for_each_segment_all(bv, bio, iter_all) {
 		page = bv->bv_page;
-		prefetchw(&page->flags);
-
-		if (bio->bi_status)
-			SetPageError(page);
 		unlock_page(page);
 	}
 	bio_put(bio);
@@ -344,6 +342,7 @@ int vdfs4_table_IO(struct vdfs4_sb_info *sbi, void *buffer,
 			(__u64)PAGE_SIZE);
 	struct blk_plug plug;
 	struct page *page;
+	atomic_t io_error = ATOMIC_INIT(0);
 
 	blk_start_plug(&plug);
 
@@ -365,6 +364,7 @@ int vdfs4_table_IO(struct vdfs4_sb_info *sbi, void *buffer,
 		}
 
 		bio->bi_end_io = table_end_IO;
+		bio->bi_private = &io_error;
 
 		do {
 			int size;
@@ -400,9 +400,9 @@ error_exit:
 		page = vmalloc_to_page((char *)buffer + (count << PAGE_SHIFT));
 		VDFS4_BUG_ON(!page, sbi);
 		folio_wait_locked(page_folio(page));
-		if (TestClearPageError(page))
-			ret = -EIO;
 	}
+	if (atomic_read(&io_error))
+		ret = -EIO;
 
 	if (!ret)
 		*iblock += submited_pages;
@@ -578,7 +578,7 @@ int vdfs4_read_page(struct block_device *bdev,
 	/* Synchronous read operation */
 	wait_for_completion(&wait);
 
-	if (PageError(page))
+	if (!PageUptodate(page))
 		return -EFAULT;
 
 	return 0;
@@ -1111,7 +1111,6 @@ static void meta_end_IO(struct bio *bio)
 		prefetchw(&page->flags);
 
 		if (bio->bi_status) {
-			SetPageError(page);
 			if (page->mapping)
 				set_bit(AS_EIO, &page->mapping->flags);
 		}
@@ -1121,6 +1120,8 @@ static void meta_end_IO(struct bio *bio)
 		} else {
 			if (!bio->bi_status)
 				SetPageUptodate(page);
+			else
+				ClearPageUptodate(page);
 			unlock_page(page);
 		}
 	}
@@ -1449,10 +1450,11 @@ exit:
 	blk_finish_plug(&plug);
 
 	for (count = 0; count < pages_count; count++) {
-		if (!PageUptodate(pages[count]))
+		if (!PageUptodate(pages[count])) {
 			folio_wait_locked(page_folio(pages[count]));
-		if (TestClearPageError(pages[count]))
-			ret = -EIO;
+			if (!PageUptodate(pages[count]))
+				ret = -EIO;
+		}
 	}
 
 	return ret;
@@ -2651,7 +2653,8 @@ confused:
 		/*
 		 * vdfs4_writepage cannot perform delayed allocations
 		 */
-		err = block_write_full_folio(folio, wbc, vdfs4_get_block);
+		err = __block_write_full_folio(inode, folio, vdfs4_get_block,
+				wbc);
 	}
 
 	/*

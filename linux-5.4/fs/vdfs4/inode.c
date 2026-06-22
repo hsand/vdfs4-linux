@@ -1244,8 +1244,14 @@ static int vdfs4_access_remote_vm(struct mm_struct *mm,
 		struct page *page = NULL;
 
 		ret = get_user_pages(addr, 1,
-				FOLL_GET | FOLL_FORCE, &page, &vma);
+				FOLL_GET | FOLL_FORCE, &page);
 		if (ret > 0) {
+			vma = vma_lookup(mm, addr);
+			if (!vma) {
+				put_page(page);
+				break;
+			}
+
 			bytes = len;
 			offset = addr & (PAGE_SIZE-1);
 			if (bytes > (int)PAGE_SIZE - offset)
@@ -1317,7 +1323,7 @@ static int current_reads_only_authenticated(struct inode *inode, bool mm_locked)
 		return ret;
 
 	if (!mm_locked)
-		down_read(&mm->mmap_sem);
+		mmap_read_lock(mm);
 	if (mm->exe_file) {
 		struct inode *caller = file_inode(mm->exe_file);
 
@@ -1356,7 +1362,7 @@ static int current_reads_only_authenticated(struct inode *inode, bool mm_locked)
 	}
 out:
 	if (!mm_locked)
-		up_read(&mm->mmap_sem);
+		mmap_read_unlock(mm);
 
 	mmput(mm);
 
@@ -3252,7 +3258,7 @@ const struct file_operations vdfs4_dir_operations = {
 	 * [vdfs4_dir_ops] add to vdfs4_dir_operations necessary methods */
 	.llseek		= vdfs4_llseek_dir,
 	.read		= generic_read_dir,
-	.iterate	= vdfs4_iterate,
+	.iterate_shared	= vdfs4_iterate,
 	.release	= vdfs4_release_dir,
 	.unlocked_ioctl = vdfs4_dir_ioctl,
 	.fsync		= vdfs4_dir_fsync,
@@ -3282,7 +3288,7 @@ static int vdfs4_file_fsync(struct file *file, loff_t start, loff_t end,
 	if (ret)
 		goto exit;
 
-	if (!datasync || (inode->i_state & I_DIRTY_DATASYNC)) {
+	if (!datasync || (inode_state_read_once(inode) & I_DIRTY_DATASYNC)) {
 		down_read(&sb->s_umount);
 		ret = sync_filesystem(sb);
 		up_read(&sb->s_umount);
@@ -3554,7 +3560,7 @@ static ssize_t vdfs4_file_splice_read(struct file *in, loff_t *ppos,
 	}
 #endif
 	VT_START(vt_data);
-	ret = generic_file_splice_read(in, ppos, pipe, len, flags);
+	ret = filemap_splice_read(in, ppos, pipe, len, flags);
 	VT_FOPS_RW_FINISH(vt_data, vdfs_trace_fops_splice_read,
 			 file_inode(in)->i_sb->s_bdev->bd_part,
 			 file_inode(in), in,
@@ -3595,8 +3601,12 @@ static int check_execution_available(struct inode *inode,
 		goto read_check;
 
 	if (vma->vm_flags & VM_EXEC) {
-		struct task_struct *p = rcu_dereference(current->real_parent);
-		struct file *exe_file = get_mm_exe_file(current->mm);
+		struct task_struct *p;
+		struct file *exe_file;
+
+		rcu_read_lock();
+		p = rcu_dereference(current->real_parent);
+		exe_file = rcu_dereference(current->mm->exe_file);
 		VDFS4_SECURITY_ERR("Security violation detected."
 			"[task:%s(pid:%d, mnt:%s)][parent:%s(pid:%d)]"
 			"[file:%s(ino:%lu, mnt:%s)]"
@@ -3609,6 +3619,7 @@ static int check_execution_available(struct inode *inode,
 			/* file */
 			VDFS4_I(inode)->name, inode->i_ino, inode->i_sb->s_id
 			);
+		rcu_read_unlock();
 		kpi_fault_for_security_error(inode);
 		VDFS4_I(inode)->informed_about_fail_read = 1;
 	}
@@ -3629,8 +3640,12 @@ static int check_execution_available(struct inode *inode,
 		goto read_check;
 
 	if (vma->vm_flags & VM_EXEC) {
-		struct task_struct *p = rcu_dereference(current->real_parent);
-		struct file *exe_file = get_mm_exe_file(current->mm);
+		struct task_struct *p;
+		struct file *exe_file;
+
+		rcu_read_lock();
+		p = rcu_dereference(current->real_parent);
+		exe_file = rcu_dereference(current->mm->exe_file);
 		VDFS4_SECURITY_ERR("Security violation detected."
 			"[task:%s(pid:%d, mnt:%s)][parent:%s(pid:%d)]"
 			"[file:%s(ino:%lu, mnt:%s)]",
@@ -3642,12 +3657,13 @@ static int check_execution_available(struct inode *inode,
 			/* file */
 			VDFS4_I(inode)->name, inode->i_ino, inode->i_sb->s_id
 			);
+		rcu_read_unlock();
 		kpi_fault_for_security_error(inode);
 		return -EPERM;
 	}
 
 	/* Forbid remmaping to executable */
-	vma->vm_flags &= (unsigned long)~VM_MAYEXEC;
+	vm_flags_clear(vma, VM_MAYEXEC);
 
 read_check:
 	if (current_reads_only_authenticated(inode, true))
@@ -4158,7 +4174,7 @@ int vdfs4_inode_check(struct inode *inode, void *data)
 	if (inode->i_ino != *(__u64 *)data)
 		return 0;
 
-	if (inode->i_state & I_FREEING) {
+	if (inode_state_read_once(inode) & I_FREEING) {
 		*(__u64 *)data |= FREEING_INODE;
 		return 0;
 	}
@@ -4214,7 +4230,7 @@ struct inode *vdfs4_get_inode_from_record(struct vdfs4_cattree_record *record,
 		goto exit;
 	}
 
-	if (!(inode->i_state & I_NEW))
+	if (!(inode_state_read_once(inode) & I_NEW))
 		goto exit;
 
 	/* follow hard link */
@@ -4592,7 +4608,7 @@ struct inode *vdfs4_special_iget(struct super_block *sb, unsigned long ino)
 		goto err_exit_no_fail;
 	}
 
-	if (!(inode->i_state & I_NEW))
+	if (!(inode_state_read_once(inode) & I_NEW))
 		goto exit;
 
 	inode->i_mode = 0;

@@ -541,19 +541,15 @@ int vdfs4_dump_to_disk(void *mapped_chunk, size_t chunk_length,
 	if (!IS_ERR(fd)) {
 		loff_t pos;
 		ssize_t written;
-		mm_segment_t fs;
 
 		pos = file_inode(fd)->i_size;
-		fs = get_fs();
-		set_fs(KERNEL_DS);
 
-		written = vfs_write(fd, mapped_chunk, chunk_length, &pos);
+		written = kernel_write(fd, mapped_chunk, chunk_length, &pos);
 		if (written < 0) {
 			VDFS4_ERR("cannot write to file %s err:%zd",
 					path, written);
 			ret = (int)written;
 		}
-		set_fs(fs);
 		filp_close(fd, NULL);
 
 		VDFS4_ERR("dump the chunk to file %s", path);
@@ -605,10 +601,12 @@ static int vdfs4_dump_to_disk_all(struct vdfs4_sb_info *sbi,
 		_free_debug_area(pages, page_count, debug_area);
 	}
 
-	/* 4. kernel log dump */
-	VDFS4_ERR("kernel log dump start\n");
-	vdfs4_dump_to_disk((void *)log_buf_addr_get(), log_buf_len_get(),
-				"vdfs_kernellog.dump");
+	/*
+	 * 4. kernel log dump - log_buf_addr_get()/log_buf_len_get() are no
+	 * longer exported to modules on this kernel, so there's no direct
+	 * way to grab the ring buffer here any more; skip it.
+	 */
+	VDFS4_ERR("kernel log dump skipped (log buffer not accessible to modules)\n");
 	return 0;
 }
 

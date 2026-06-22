@@ -345,13 +345,12 @@ int vdfs4_set_acl(struct mnt_idmap *idmap, struct inode *inode,
 		size = posix_acl_xattr_size((int)acl->a_count);
 		if (size > VDFS4_XATTR_VAL_MAX_LEN)
 			return -ERANGE;
-		data = kmalloc(size, GFP_NOFS);
-		if (!data)
-			return -ENOMEM;
-		ret = posix_acl_to_xattr(&init_user_ns, acl, data, size);
-		if (ret < 0)
+		data = posix_acl_to_xattr(&init_user_ns, acl, &size, GFP_NOFS);
+		if (IS_ERR(data)) {
+			ret = PTR_ERR(data);
+			data = NULL;
 			goto err_encode;
-		size = (size_t)ret;
+		}
 	}
 
 	vdfs4_start_transaction(sbi);
@@ -380,6 +379,8 @@ static int vdfs4_get_acl_xattr(struct inode *inode, int type,
 				void *buffer, size_t size)
 {
 	struct posix_acl *acl;
+	void *xattr_value;
+	size_t real_size;
 	int ret;
 
 	if (!IS_POSIXACL(inode) || S_ISLNK(inode->i_mode))
@@ -389,8 +390,21 @@ static int vdfs4_get_acl_xattr(struct inode *inode, int type,
 		return PTR_ERR(acl);
 	if (!acl)
 		return -ENODATA;
-	ret = posix_acl_to_xattr(&init_user_ns, acl, buffer, size);
+
+	xattr_value = posix_acl_to_xattr(&init_user_ns, acl, &real_size,
+			GFP_KERNEL);
 	posix_acl_release(acl);
+	if (IS_ERR(xattr_value))
+		return PTR_ERR(xattr_value);
+
+	ret = (int)real_size;
+	if (buffer) {
+		if (real_size > size)
+			ret = -ERANGE;
+		else
+			memcpy(buffer, xattr_value, real_size);
+	}
+	kfree(xattr_value);
 	return ret;
 }
 
