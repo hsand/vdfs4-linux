@@ -3190,7 +3190,7 @@ const struct address_space_operations vdfs4_aops = {
 	.direct_IO	= vdfs4_direct_IO,
 	.migrate_folio	= buffer_migrate_folio,
 	.release_folio = vdfs4_release_folio,
-/*	.dirty_folio = block_dirty_folio,*/
+	.dirty_folio	= block_dirty_folio,
 
 };
 
@@ -3232,7 +3232,7 @@ static const struct address_space_operations vdfs4_aops_special = {
 	.bmap		= vdfs4_bmap,
 	.direct_IO	= vdfs4_direct_IO,
 	.migrate_folio	= vdfs4_fail_migrate_folio,
-/*	.dirty_folio = block_dirty_folio,*/
+	.dirty_folio	= block_dirty_folio,
 };
 
 /**
