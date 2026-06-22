@@ -2258,6 +2258,22 @@ static int vdfs4_file_open(struct inode *inode, struct file *filp)
 			rc = vdfs4_file_open_init_compressed(inode);
 		if (rc)
 			goto exit;
+		/*
+		 * vdfs4_tuned_aops{,_hw} only implement ->read_folio(), not
+		 * ->readahead(). On kernels new enough to have folios, the
+		 * generic ->read_folio()-only readahead fallback
+		 * (page_cache_ra_unbounded()/read_pages()) locks every folio
+		 * in the readahead window up front before calling
+		 * ->read_folio() on each in turn. But ->read_folio() for a
+		 * compressed/"tuned" chunk independently looks up every page
+		 * covering that whole chunk via find_or_create_page(), which
+		 * deadlocks if one of those pages is a later folio in the
+		 * same readahead window that the VFS has already locked and
+		 * is waiting on us to get back to. Disabling readahead makes
+		 * the VFS fetch exactly one folio at a time, sidestepping the
+		 * cross-page lock ordering issue entirely.
+		 */
+		filp->f_ra.ra_pages = 0;
 	}
 #ifdef CONFIG_VDFS4_SQUEEZE
 	if (is_vdfs4_inode_flag_set(inode, VDFS4_PROFILED_FILE)) {
