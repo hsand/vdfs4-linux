@@ -78,8 +78,8 @@ static const uint16_t supported_compressed_layouts[] = {
  * @param [in]	nd		Struct with name data
  * @return		Returns 0 on success, errno on failure
  */
-static int vdfs4_create(struct inode *dir, struct dentry *dentry, umode_t mode,
-		bool excl);
+static int vdfs4_create(struct mnt_idmap *idmap, struct inode *dir,
+		struct dentry *dentry, umode_t mode, bool excl);
 
 static int vdfs4_get_block_prep_da(struct inode *inode, sector_t iblock,
 		struct buffer_head *bh_result, int create);
@@ -92,7 +92,8 @@ static int vdfs4_get_block_prep_da(struct inode *inode, sector_t iblock,
  * @return		Returns pointer to newly created inode on success,
  *			errno on failure
  */
-static struct inode *vdfs4_new_inode(struct inode *dir, umode_t mode);
+static struct inode *vdfs4_new_inode(struct mnt_idmap *idmap,
+		struct inode *dir, umode_t mode);
 
 /**
  * @brief		Get root folder.
@@ -2322,15 +2323,16 @@ static int vdfs4_file_release(struct inode *inode, struct file *file)
  * @param [in]	mode	Mode of operation
  * @return		Returns error codes
  */
-static int vdfs4_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
+static struct dentry *vdfs4_mkdir(struct mnt_idmap *idmap, struct inode *dir,
+		struct dentry *dentry, umode_t mode)
 {
 	int rtn;
 
 	VT_PREPARE_PARAM(vt_data);
 	VT_IOPS_DENTRY_START(vt_data, vdfs_trace_iops_mkdir, dentry);
-	rtn = vdfs4_create(dir, dentry, S_IFDIR | mode, NULL);
+	rtn = vdfs4_create(idmap, dir, dentry, S_IFDIR | mode, false);
 	VT_FINISH(vt_data);
-	return rtn;
+	return rtn ? ERR_PTR(rtn) : NULL;
 }
 
 /**
@@ -2461,7 +2463,8 @@ static int vdfs4_update_inode(struct inode *inode, loff_t newsize)
  * @param [in]	iattr	Attributes to be set
  * @return		Returns error codes
  */
-static int vdfs4_setattr(struct dentry *dentry, struct iattr *iattr)
+static int vdfs4_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
+		struct iattr *iattr)
 {
 	struct inode *inode = dentry->d_inode;
 	int error = 0;
@@ -2470,7 +2473,7 @@ static int vdfs4_setattr(struct dentry *dentry, struct iattr *iattr)
 
 	VT_IOPS_DENTRY_START(vt_data, vdfs_trace_iops_setattr, dentry);
 	vdfs4_start_transaction(VDFS4_SB(inode->i_sb));
-	error = setattr_prepare(dentry, iattr);
+	error = setattr_prepare(idmap, dentry, iattr);
 	if (error)
 		goto exit;
 
@@ -2489,13 +2492,13 @@ static int vdfs4_setattr(struct dentry *dentry, struct iattr *iattr)
 			goto exit;
 	}
 
-	setattr_copy(inode, iattr);
+	setattr_copy(idmap, inode, iattr);
 
 	mark_inode_dirty(inode);
 
 #ifdef CONFIG_VDFS4_POSIX_ACL
 	if (iattr->ia_valid & ATTR_MODE)
-		error = posix_acl_chmod(inode, inode->i_mode);
+		error = posix_acl_chmod(idmap, dentry, inode->i_mode);
 #endif
 
 exit:
@@ -2885,7 +2888,8 @@ error:
 	return ret;
 }
 
-static int vdfs4_rename2(struct inode *old_dir, struct dentry *old_dentry,
+static int vdfs4_rename2(struct mnt_idmap *idmap, struct inode *old_dir,
+			 struct dentry *old_dentry,
 			 struct inode *new_dir, struct dentry *new_dentry,
 			 unsigned int flags)
 {
@@ -3076,8 +3080,8 @@ err_exit:
  * @param [in]		rdev	Device
  * @return			Returns 0 on success, errno on failure
  */
-static int vdfs4_mknod(struct inode *dir, struct dentry *dentry,
-			umode_t mode, dev_t rdev)
+static int vdfs4_mknod(struct mnt_idmap *idmap, struct inode *dir,
+			struct dentry *dentry, umode_t mode, dev_t rdev)
 {
 	struct inode *created_ino;
 	int ret;
@@ -3087,7 +3091,7 @@ static int vdfs4_mknod(struct inode *dir, struct dentry *dentry,
 	VT_IOPS_DENTRY_START(vt_data, vdfs_trace_iops_mknod, dentry);
 	vdfs4_start_transaction(VDFS4_SB(dir->i_sb));
 
-	ret = vdfs4_create(dir, dentry, mode, NULL);
+	ret = vdfs4_create(idmap, dir, dentry, mode, false);
 	if (ret)
 		goto exit;
 
@@ -3107,8 +3111,8 @@ exit:
  * @param [in]		symname Symbolic link name
  * @return			Returns 0 on success, errno on failure
  */
-static int vdfs4_symlink(struct inode *dir, struct dentry *dentry,
-	const char *symname)
+static int vdfs4_symlink(struct mnt_idmap *idmap, struct inode *dir,
+	struct dentry *dentry, const char *symname)
 {
 	int ret;
 	struct inode *created_ino;
@@ -3128,7 +3132,7 @@ static int vdfs4_symlink(struct inode *dir, struct dentry *dentry,
 	if (ret)
 		goto err_reserve;
 
-	ret = vdfs4_create(dir, dentry, S_IFLNK | S_IRWXUGO, NULL);
+	ret = vdfs4_create(idmap, dir, dentry, S_IFLNK | S_IRWXUGO, false);
 	if (ret)
 		goto err_create;
 	created_ino = dentry->d_inode;
@@ -3247,8 +3251,9 @@ static const struct inode_operations vdfs4_dir_inode_operations = {
 
 	.listxattr	= vdfs4_listxattr,
 #ifdef CONFIG_VDFS4_POSIX_ACL
-	.get_acl	= vdfs4_get_acl,
-	.set_acl	= vdfs4_set_acl,
+	.get_inode_acl	= vdfs4_get_inode_acl,
+	.get_acl	= vdfs4_i_op_get_acl,
+	.set_acl	= vdfs4_i_op_set_acl,
 #endif
 };
 
@@ -3753,8 +3758,9 @@ const struct inode_operations vdfs4_special_inode_operations = {
 	.setattr	= vdfs4_setattr,
 	.listxattr	= vdfs4_listxattr,
 #ifdef CONFIG_VDFS4_POSIX_ACL
-	.get_acl	= vdfs4_get_acl,
-	.set_acl	= vdfs4_set_acl,
+	.get_inode_acl	= vdfs4_get_inode_acl,
+	.get_acl	= vdfs4_i_op_get_acl,
+	.set_acl	= vdfs4_i_op_set_acl,
 #endif
 };
 /**
@@ -3764,8 +3770,9 @@ static const struct inode_operations vdfs4_file_inode_operations = {
 	.setattr	= vdfs4_setattr,
 	.listxattr	= vdfs4_listxattr,
 #ifdef CONFIG_VDFS4_POSIX_ACL
-	.get_acl	= vdfs4_get_acl,
-	.set_acl	= vdfs4_set_acl,
+	.get_inode_acl	= vdfs4_get_inode_acl,
+	.get_acl	= vdfs4_i_op_get_acl,
+	.set_acl	= vdfs4_i_op_set_acl,
 #endif
 };
 
@@ -4363,7 +4370,8 @@ error_exit:
  * @return		Returns pointer to inode on success, errno on failure
  */
 
-static struct inode *vdfs4_new_inode(struct inode *dir, umode_t mode)
+static struct inode *vdfs4_new_inode(struct mnt_idmap *idmap,
+		struct inode *dir, umode_t mode)
 {
 	struct super_block *sb = dir->i_sb;
 	struct  vdfs4_sb_info *sbi = VDFS4_SB(sb);
@@ -4393,7 +4401,7 @@ static struct inode *vdfs4_new_inode(struct inode *dir, umode_t mode)
 	if (test_option(sbi, FMASK) && S_ISREG(mode))
 		mode = mode & (umode_t)(~sbi->fmask);
 
-	inode_init_owner(inode, dir, mode);
+	inode_init_owner(idmap, inode, dir, mode);
 
 	set_nlink(inode, 1);
 	inode->i_size = 0;
@@ -4448,8 +4456,8 @@ err_exit:
  * @param [in]		nd	Namedata for file
  * @return			Returns 0 on success, errno on failure
  */
-static int vdfs4_create(struct inode *dir, struct dentry *dentry, umode_t mode,
-		bool excl)
+static int vdfs4_create(struct mnt_idmap *idmap, struct inode *dir,
+		struct dentry *dentry, umode_t mode, bool excl)
 {
 	struct super_block *sb = dir->i_sb;
 	struct vdfs4_sb_info *sbi = sb->s_fs_info;
@@ -4472,7 +4480,7 @@ static int vdfs4_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 
 	VT_IOPS_DENTRY_START(vt_data, vdfs_trace_iops_create, dentry);
 	vdfs4_start_transaction(sbi);
-	inode = vdfs4_new_inode(dir, mode);
+	inode = vdfs4_new_inode(idmap, dir, mode);
 
 	if (IS_ERR(inode)) {
 		kfree(saved_name);
@@ -4500,7 +4508,7 @@ static int vdfs4_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 	vdfs4_cattree_w_unlock(sbi);
 
 #ifdef CONFIG_VDFS4_POSIX_ACL
-	ret = vdfs4_init_acl(inode, dir);
+	ret = vdfs4_init_acl(idmap, inode, dir);
 	if (ret)
 		goto err_unlock;
 #endif

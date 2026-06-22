@@ -286,7 +286,35 @@ struct posix_acl *vdfs4_get_acl(struct inode *inode, int type)
 	return acl;
 }
 
-int vdfs4_set_acl(struct inode *inode, struct posix_acl *acl, int type)
+/*
+ * inode_operations split the old single get_acl hook in two: get_inode_acl()
+ * is the permission-check fast path and may be called under RCU (rcu=true),
+ * where it must not block; get_acl() is the full idmap+dentry version used
+ * for explicit ACL retrieval (e.g. getxattr). vdfs4_get_acl() always takes
+ * a mutex, so the RCU case just bails with -ECHILD to make the VFS retry
+ * outside RCU mode.
+ */
+struct posix_acl *vdfs4_get_inode_acl(struct inode *inode, int type, bool rcu)
+{
+	if (rcu)
+		return ERR_PTR(-ECHILD);
+	return vdfs4_get_acl(inode, type);
+}
+
+struct posix_acl *vdfs4_i_op_get_acl(struct mnt_idmap *idmap,
+		struct dentry *dentry, int type)
+{
+	return vdfs4_get_acl(d_inode(dentry), type);
+}
+
+int vdfs4_i_op_set_acl(struct mnt_idmap *idmap, struct dentry *dentry,
+		struct posix_acl *acl, int type)
+{
+	return vdfs4_set_acl(idmap, d_inode(dentry), acl, type);
+}
+
+int vdfs4_set_acl(struct mnt_idmap *idmap, struct inode *inode,
+		struct posix_acl *acl, int type)
 {
 	struct vdfs4_sb_info *sbi = VDFS4_SB(inode->i_sb);
 	const char *name;
@@ -298,8 +326,8 @@ int vdfs4_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 	case ACL_TYPE_ACCESS:
 		name = XATTR_NAME_POSIX_ACL_ACCESS;
 		if (acl) {
-			ret = posix_acl_update_mode(inode, &inode->i_mode,
-						    &acl);
+			ret = posix_acl_update_mode(idmap, inode,
+						    &inode->i_mode, &acl);
 			if (ret)
 				return ret;
 		}
@@ -366,8 +394,8 @@ static int vdfs4_get_acl_xattr(struct inode *inode, int type,
 	return ret;
 }
 
-static int vdfs4_set_acl_xattr(struct inode *inode, int type,
-				const void *value, size_t size)
+static int vdfs4_set_acl_xattr(struct mnt_idmap *idmap, struct inode *inode,
+				int type, const void *value, size_t size)
 {
 	struct posix_acl *acl;
 	int ret = 0;
@@ -376,7 +404,7 @@ static int vdfs4_set_acl_xattr(struct inode *inode, int type,
 		return -EOPNOTSUPP;
 	if (type == ACL_TYPE_DEFAULT && !S_ISDIR(inode->i_mode))
 		return value ? -EACCES : 0;
-	if (!inode_owner_or_capable(inode))
+	if (!inode_owner_or_capable(idmap, inode))
 		return -EPERM;
 	acl = posix_acl_from_xattr(&init_user_ns, value, size);
 	if (IS_ERR(acl))
@@ -384,12 +412,13 @@ static int vdfs4_set_acl_xattr(struct inode *inode, int type,
 	if (acl)
 		ret = posix_acl_valid(inode->i_sb->s_user_ns, acl);
 	if (!ret)
-		ret = vdfs4_set_acl(inode, acl, type);
+		ret = vdfs4_set_acl(idmap, inode, acl, type);
 	posix_acl_release(acl);
 	return ret;
 }
 
-int vdfs4_init_acl(struct inode *inode, struct inode *dir)
+int vdfs4_init_acl(struct mnt_idmap *idmap, struct inode *inode,
+		struct inode *dir)
 {
 	struct posix_acl *default_acl = NULL, *acl = NULL;
 	int error;
@@ -399,12 +428,12 @@ int vdfs4_init_acl(struct inode *inode, struct inode *dir)
 		return error;
 
 	if (default_acl) {
-		error = vdfs4_set_acl(inode, default_acl, ACL_TYPE_DEFAULT);
+		error = vdfs4_set_acl(idmap, inode, default_acl, ACL_TYPE_DEFAULT);
 		posix_acl_release(default_acl);
 	}
 	if (acl) {
 		if (!error)
-			error = vdfs4_set_acl(inode, acl, ACL_TYPE_ACCESS);
+			error = vdfs4_set_acl(idmap, inode, acl, ACL_TYPE_ACCESS);
 		posix_acl_release(acl);
 	}
 	return error;
@@ -417,8 +446,8 @@ static int vdfs4_get_acl_xattr(struct inode *inode, int type,
 	return -EOPNOTSUPP;
 }
 
-static int vdfs4_set_acl_xattr(struct inode *inode, int type,
-				const void *value, size_t size)
+static int vdfs4_set_acl_xattr(struct mnt_idmap *idmap, struct inode *inode,
+				int type, const void *value, size_t size)
 {
 	return -EOPNOTSUPP;
 }
@@ -464,7 +493,8 @@ int vdfs4_xattrtree_remove_all(struct vdfs4_btree *tree, u64 object_id)
 	return ret;
 }
 
-static int vdfs4_setxattr(struct inode *inode, const char *name,
+static int vdfs4_setxattr(struct mnt_idmap *idmap, struct inode *inode,
+			  const char *name,
 			  const void *value, size_t size, int flags)
 {
 	int ret = 0;
@@ -485,9 +515,11 @@ static int vdfs4_setxattr(struct inode *inode, const char *name,
 		return -EOPNOTSUPP;
 
 	if (!strcmp(name, XATTR_NAME_POSIX_ACL_DEFAULT))
-		return vdfs4_set_acl_xattr(inode, ACL_TYPE_DEFAULT, value, size);
+		return vdfs4_set_acl_xattr(idmap, inode, ACL_TYPE_DEFAULT,
+				value, size);
 	if (!strcmp(name, XATTR_NAME_POSIX_ACL_ACCESS))
-		return vdfs4_set_acl_xattr(inode, ACL_TYPE_ACCESS, value, size);
+		return vdfs4_set_acl_xattr(idmap, inode, ACL_TYPE_ACCESS,
+				value, size);
 
 	VT_IOPS_INODE_START(vt_data, vdfs_trace_iops_setxattr, inode);
 	vdfs4_start_transaction(sbi);
@@ -714,10 +746,11 @@ static int vdfs4_xattr_generic_get(const struct xattr_handler *handler,
 }
 
 static int vdfs4_xattr_generic_set(const struct xattr_handler *handler,
+		struct mnt_idmap *idmap,
 		struct dentry *unused, struct inode *inode,
 		const char *name, const void *value, size_t size, int flags)
 {
-	return vdfs4_setxattr(inode, name, value, size, flags);
+	return vdfs4_setxattr(idmap, inode, name, value, size, flags);
 }
 
 const struct xattr_handler vdfs4_xattr_handler = {
@@ -726,12 +759,14 @@ const struct xattr_handler vdfs4_xattr_handler = {
 	.set	= vdfs4_xattr_generic_set,
 };
 
+/*
+ * system.posix_acl_access/default no longer go through registered
+ * xattr_handlers - the VFS now special-cases those names in
+ * vfs_getxattr()/vfs_setxattr() and calls i_op->get_acl()/set_acl()
+ * directly, so there is nothing to list here for them any more.
+ */
 /* xattr handlers */
 const struct xattr_handler *vdfs4_xattr_handlers[] = {
 	&vdfs4_xattr_handler,
-#ifdef CONFIG_VDFS4_POSIX_ACL
-	&posix_acl_access_xattr_handler,
-	&posix_acl_default_xattr_handler,
-#endif
 	NULL
 };

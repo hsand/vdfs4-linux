@@ -183,7 +183,7 @@ long vdfs4_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 				(int __user *) arg);
 		break;
 	case FS_IOC_SETFLAGS:
-		if (!inode_owner_or_capable(inode)) {
+		if (!inode_owner_or_capable(file_mnt_idmap(filp), inode)) {
 			ret = -EACCES;
 			break;
 		}

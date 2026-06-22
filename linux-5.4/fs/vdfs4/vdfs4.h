@@ -1478,8 +1478,15 @@ ssize_t vdfs4_listxattr(struct dentry *dentry, char *buffer, size_t size);
 int vdfs4_xattrtree_remove_all(struct vdfs4_btree *tree, u64 object_id);
 
 struct posix_acl *vdfs4_get_acl(struct inode *inode, int type);
-int vdfs4_set_acl(struct inode *inode, struct posix_acl *acl, int type);
-int vdfs4_init_acl(struct inode *inode, struct inode *dir);
+int vdfs4_set_acl(struct mnt_idmap *idmap, struct inode *inode,
+		struct posix_acl *acl, int type);
+int vdfs4_init_acl(struct mnt_idmap *idmap, struct inode *inode,
+		struct inode *dir);
+struct posix_acl *vdfs4_get_inode_acl(struct inode *inode, int type, bool rcu);
+struct posix_acl *vdfs4_i_op_get_acl(struct mnt_idmap *idmap,
+		struct dentry *dentry, int type);
+int vdfs4_i_op_set_acl(struct mnt_idmap *idmap, struct dentry *dentry,
+		struct posix_acl *acl, int type);
 int vdfs4_init_security_xattrs(struct inode *inode,
 		const struct xattr *xattr_array, void *fs_data);
 extern const struct xattr_handler *vdfs4_xattr_handlers[];
