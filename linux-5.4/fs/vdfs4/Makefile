@@ -27,12 +27,20 @@ ifneq ($(KBUILD_EXTMOD),)
 # building as external module
 CONFIG_VDFS4_FS = m
 CONFIG_VDFS4_DEBUG = y
+CONFIG_VDFS4_AUTHENTICATION = y
+CONFIG_VDFS4_ALLOW_LEGACY_SIGN = y
 ccflags-y += -DCONFIG_VDFS4_MODULE=1
 ccflags-y += -DCONFIG_VDFS4_DEBUG=1
 ccflags-y += -DCONFIG_VDFS4_META_SANITY_CHECK=1
 ccflags-y += -DCONFIG_VDFS4_POSIX_ACL=1
 ccflags-y += -DCONFIG_VDFS4_DECRYPT_SUPPORT=1
+ccflags-y += -DCONFIG_VDFS4_AUTHENTICATION=1
+ccflags-y += -DCONFIG_VDFS4_ALLOW_LEGACY_SIGN=1
 #ccflags-y += -CONFIG_VDFS4_HW_DECOMPRESS_SUPPORT=1
+# Out-of-tree build: provide our own copies of the tracepoint headers
+# (<trace/events/vdfs4.h>, <linux/vdfs_trace.h>) since they don't exist
+# in the target kernel's installed header set.
+ccflags-y += -I$(src)/../../include
 endif
 
 ifdef VDFS4_NO_WARN
@@ -47,6 +55,11 @@ vdfs4-y	:= btree.o bnode.o cattree.o file.o inode.o \
 		   cattree-helper.o xattr.o \
 		   decompress.o authentication.o \
 		   debug.o
+
+# crypto_wrapper provides the RSA/hash helpers authentication.c calls into;
+# upstream it lives in kernel/crypto, out-of-tree it has to be linked into
+# the module itself since the host kernel doesn't build it in.
+vdfs4-$(CONFIG_VDFS4_AUTHENTICATION) += crypto_wrapper.o
 
 vdfs4-$(CONFIG_VDFS4_TRACE) += vdfs_trace.o
 vdfs4-$(CONFIG_VDFS4_DECOMP_TRACE) += decomp_trace.o
