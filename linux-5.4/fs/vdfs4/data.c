@@ -399,7 +399,7 @@ error_exit:
 	for (count = 0; count < submited_pages; count++) {
 		page = vmalloc_to_page((char *)buffer + (count << PAGE_SHIFT));
 		VDFS4_BUG_ON(!page, sbi);
-		wait_on_page_locked(page);
+		folio_wait_locked(page_folio(page));
 		if (TestClearPageError(page))
 			ret = -EIO;
 	}
@@ -1450,7 +1450,7 @@ exit:
 
 	for (count = 0; count < pages_count; count++) {
 		if (!PageUptodate(pages[count]))
-			wait_on_page_locked(pages[count]);
+			folio_wait_locked(page_folio(pages[count]));
 		if (TestClearPageError(pages[count]))
 			ret = -EIO;
 	}
@@ -2466,13 +2466,13 @@ struct bio *vdfs4_mpage_bio_submit(unsigned int bi_opf, struct bio *bio)
 	return NULL;
 }
 
-int vdfs4_mpage_writepage(struct page *page,
+int vdfs4_mpage_writepage(struct folio *folio,
 		struct writeback_control *wbc, void *data)
 {
 	struct vdfs4_mpage_data *mpd = data;
 	struct bio *bio = mpd->bio;
-	struct address_space *mapping = page->mapping;
-	struct inode *inode = page->mapping->host;
+	struct address_space *mapping = folio->mapping;
+	struct inode *inode = folio->mapping->host;
 	struct vdfs4_sb_info *sbi = VDFS4_SB(inode->i_sb);
 	struct block_device *bdev = sbi->sb->s_bdev;
 	sector_t offset_alloc_hint = 0;
@@ -2489,10 +2489,10 @@ int vdfs4_mpage_writepage(struct page *page,
 	bool need_invalidate = false;
 
 	memset(&extent, 0x0, sizeof(extent));
-	block_in_file = (sector_t)page_folio(page)->index << (PAGE_SHIFT - blkbits);
+	block_in_file = (sector_t)folio->index << (PAGE_SHIFT - blkbits);
 	blocksize = (unsigned int)(1 << inode->i_blkbits);
-	if (page_has_buffers(page)) {
-		bh = page_buffers(page);
+	if (folio_buffers(folio)) {
+		bh = folio_buffers(folio);
 		VDFS4_BUG_ON(buffer_locked(bh), sbi);
 		mutex_lock(&inode_info->truncate_mutex);
 		if (buffer_mapped(bh)) {
@@ -2509,7 +2509,7 @@ int vdfs4_mpage_writepage(struct page *page,
 					if (err) {
 						mutex_unlock(&inode_info->
 								truncate_mutex);
-						unlock_page(page);
+						folio_unlock(folio);
 						goto out;
 					}
 				} else {
@@ -2542,10 +2542,10 @@ int vdfs4_mpage_writepage(struct page *page,
 		/*
 		* The page has no buffers: map it to disk
 		*/
-		VDFS4_BUG_ON(!PageUptodate(page), sbi);
+		VDFS4_BUG_ON(!folio_test_uptodate(folio), sbi);
 
-		create_empty_buffers(page, blocksize, 0);
-		bh = page_buffers(page);
+		create_empty_buffers(folio, blocksize, 0);
+		bh = folio_buffers(folio);
 
 		bh->b_state = 0;
 		bh->b_size = (size_t)(1lu << blkbits);
@@ -2557,7 +2557,7 @@ int vdfs4_mpage_writepage(struct page *page,
 
 	boundary_block = bh->b_blocknr;
 	end_index = (unsigned long int)(i_size >> PAGE_SHIFT);
-	if (page_folio(page)->index >= end_index) {
+	if (folio->index >= end_index) {
 		/*
 		 * The page straddles i_size.  It must be zeroed out on each
 		 * and every writepage invocation because it may be mmapped.
@@ -2568,11 +2568,11 @@ int vdfs4_mpage_writepage(struct page *page,
 		 */
 		unsigned offset = i_size & (PAGE_SIZE - 1);
 
-		if (page_folio(page)->index > end_index || !offset) {
+		if (folio->index > end_index || !offset) {
 			need_invalidate = true;
 			goto confused;
 		}
-		zero_user_segment(page, offset, PAGE_SIZE);
+		folio_zero_segment(folio, offset, PAGE_SIZE);
 	}
 
 	/*
@@ -2607,7 +2607,7 @@ alloc_new:
 	/*
 	 * TODO: replace PAGE_SIZE with real user data size?
 	 */
-	if (bio_add_page(bio, page, PAGE_SIZE, 0) < (int)PAGE_SIZE) {
+	if (!bio_add_folio(bio, folio, PAGE_SIZE, 0)) {
 		bio = vdfs4_mpage_bio_submit(REQ_OP_WRITE, bio);
 		goto alloc_new;
 	}
@@ -2616,15 +2616,15 @@ alloc_new:
 	 * OK, we have our BIO, so we can now mark the buffers clean.  Make
 	 * sure to only clean buffers which we know we'll be writing.
 	 */
-	if (page_has_buffers(page)) {
-		struct buffer_head *head = page_buffers(page);
+	if (folio_buffers(folio)) {
+		struct buffer_head *head = folio_buffers(folio);
 
 		clear_buffer_dirty(head);
 	}
 
-	VDFS4_BUG_ON(PageWriteback(page), sbi);
-	set_page_writeback(page);
-	unlock_page(page);
+	VDFS4_BUG_ON(folio_test_writeback(folio), sbi);
+	folio_start_writeback(folio);
+	folio_unlock(folio);
 	mpd->last_block_in_bio = boundary_block;
 	goto out;
 
@@ -2639,18 +2639,19 @@ confused:
 
 	if (need_invalidate) {
 		/*
-		 * Call invalidatepage() to clear buffer_head dirty flag.
-		 * page dirty flag is already cleared by write_cache_pages()
-		 * The dirty flags(bh&page) will be set in write_begin() again.
+		 * Call block_invalidate_folio() to clear buffer_head dirty
+		 * flag. The folio dirty flag was already cleared by
+		 * writeback_iter(). The dirty flags (bh & folio) will be
+		 * set in write_begin() again.
 		 */
-		block_invalidatepage(page, 0, PAGE_SIZE);
-		unlock_page(page);
+		block_invalidate_folio(folio, 0, PAGE_SIZE);
+		folio_unlock(folio);
 		err = 0;
 	} else {
 		/*
 		 * vdfs4_writepage cannot perform delayed allocations
 		 */
-		err = block_write_full_page(page, vdfs4_get_block, wbc);
+		err = block_write_full_folio(folio, wbc, vdfs4_get_block);
 	}
 
 	/*

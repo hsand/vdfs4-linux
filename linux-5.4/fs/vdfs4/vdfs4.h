@@ -34,6 +34,7 @@
 #include <linux/pagevec.h>
 #include <linux/blkdev.h>
 #include <linux/part_stat.h>
+#include <linux/mnt_idmapping.h>
 #include <linux/completion.h>
 #include <linux/version.h>
 #include <linux/list.h>
@@ -1430,7 +1431,7 @@ struct page *vdfs4_read_or_create_page(struct inode *inode, pgoff_t index,
 		enum vdfs4_read_type type);
 struct bio *vdfs4_mpage_bio_submit(unsigned int bi_opf, struct bio *bio);
 
-int vdfs4_mpage_writepage(struct page *page,
+int vdfs4_mpage_writepage(struct folio *folio,
 		struct writeback_control *wbc, void *data);
 
 int vdfs4_get_table_sector(struct vdfs4_sb_info *sbi, sector_t iblock,

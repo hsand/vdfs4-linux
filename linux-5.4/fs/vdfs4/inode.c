@@ -1219,32 +1219,15 @@ int vdfs4_get_block_da(struct inode *inode, sector_t iblock,
 					VDFS4_FSM_ALLOC_DELAYED);
 }
 
-/**
- * @brief					This is a special get_block_t callback
- *							which is used by vdfs4_writepage().
- *							This function will be not called in normal.
- * @param [in]         inode           Pointer to inode structure.
- * @param [in]         iblock          Requested logical block number.
- * @param [in, out]    bh_result       Pointer to buffer_head.
- * @param [in]         create          "Expand file allowed" flag.
- * @return                     0 on success, or error code
- */
-static int vdfs4_get_block_bug(struct inode *inode, sector_t iblock,
-	struct buffer_head *bh_result, int create)
+static bool vdfs4_release_folio(struct folio *folio, gfp_t gfp_mask)
 {
-	VDFS4_BUG(VDFS4_SB(inode->i_sb));
-	return 0;
-}
+	if (!folio_buffers(folio))
+		return false;
 
-static int vdfs4_releasepage(struct page *page, gfp_t gfp_mask)
-{
-	if (!page_has_buffers(page))
-		return 0;
+	if (buffer_delay(folio_buffers(folio)))
+		return false;
 
-	if (buffer_delay(page_buffers(page)))
-		return 0;
-
-	return try_to_free_buffers(page);
+	return try_to_free_buffers(folio);
 }
 
 #ifdef CONFIG_VDFS4_AUTHENTICATION
@@ -1411,6 +1394,12 @@ static int vdfs4_readpage_inline_data(struct file *file, struct page *page)
 	return 0;
 }
 
+static int vdfs4_read_folio_inline_data(struct file *file,
+		struct folio *folio)
+{
+	return vdfs4_readpage_inline_data(file, &folio->page);
+}
+
 /**
  * @brief		Read and decompress page from inline data area in meta.
  * @param [in]	file	Pointer to file structure
@@ -1520,20 +1509,26 @@ exit:
 	return ret;
 }
 
+static int vdfs4_read_folio_comp_inline_data(struct file *file,
+		struct folio *folio)
+{
+	return vdfs4_readpage_comp_inline_data(file, &folio->page);
+}
+
 /**
  * @brief		Read page function.
  * @param [in]	file	Pointer to file structure
  * @param [out]	page	Pointer to page structure
  * @return		Returns error codes
  */
-static int vdfs4_readpage(struct file *file, struct page *page)
+static int vdfs4_read_folio(struct file *file, struct folio *folio)
 {
 	int ret;
 
 	VT_PREPARE_PARAM(vt_data);
 	VT_AOPS_START(vt_data, vdfs_trace_aops_readpage,
-		      page->mapping->host, file, page_folio(page)->index, 1, AOPS_SYNC);
-	ret = mpage_readpage(page, vdfs4_get_block);
+		      folio->mapping->host, file, folio->index, 1, AOPS_SYNC);
+	ret = mpage_read_folio(folio, vdfs4_get_block);
 
 	VT_FINISH(vt_data);
 	return ret;
@@ -1543,10 +1538,10 @@ static int vdfs4_readpage(struct file *file, struct page *page)
 /**
  * @brief		Read page function.
  * @param [in]	file	Pointer to file structure
- * @param [out]	page	Pointer to page structure
+ * @param [out]	folio	Pointer to folio structure
  * @return		Returns error codes
  */
-static int vdfs4_readpage_special(struct file *file, struct page *page)
+static int vdfs4_read_folio_special(struct file *file, struct folio *folio)
 {
 	VDFS4_BUG(NULL);
 }
@@ -1559,24 +1554,17 @@ static int vdfs4_readpage_special(struct file *file, struct page *page)
  * param [in]	nr_pages	Number of pages
  * @return			Returns error codes
  */
-static int vdfs4_readpages(struct file *file, struct address_space *mapping,
-		struct list_head *pages, unsigned nr_pages)
+static void vdfs4_readahead(struct readahead_control *rac)
 {
-	int ret;
-
 	VT_PREPARE_PARAM(vt_data);
 	VT_AOPS_START(vt_data, vdfs_trace_aops_readpages,
-		      mapping->host, file,
-		      list_entry(pages->prev, struct page, lru)->index,
-		      nr_pages, AOPS_SYNC);
-	ret = mpage_readpages(mapping, pages, nr_pages, vdfs4_get_block);
+		      rac->mapping->host, rac->file,
+		      readahead_index(rac), readahead_count(rac), AOPS_SYNC);
+	mpage_readahead(rac, vdfs4_get_block);
 	VT_FINISH(vt_data);
-	return ret;
 }
 
-static int vdfs4_readpages_special(struct file *file,
-		struct address_space *mapping, struct list_head *pages,
-		unsigned nr_pages)
+static void vdfs4_readahead_special(struct readahead_control *rac)
 {
 	VDFS4_BUG(NULL);
 }
@@ -1813,42 +1801,6 @@ err:
  * @param [in]	wbc		Write back control array
  * @return		Returns error codes
  */
-static int vdfs4_writepage(struct page *page, struct writeback_control *wbc)
-{
-	struct inode *inode = page->mapping->host;
-	struct buffer_head *bh;
-	int ret = 0;
-
-	VT_PREPARE_PARAM(vt_data);
-
-	VDFS4_BUG_ON(inode->i_ino <= VDFS4_LSFILE, VDFS4_SB(inode->i_sb));
-
-	if (!page_has_buffers(page))
-		goto redirty_page;
-
-	bh = page_buffers(page);
-	if ((!buffer_mapped(bh) || buffer_delay(bh)) && buffer_dirty(bh))
-		goto redirty_page;
-
-	VT_AOPS_START(vt_data, vdfs_trace_aops_writepage,
-		      page->mapping->host, NULL, 0, wbc->nr_to_write,
-		      wbc->sync_mode);
-	ret = block_write_full_page(page, vdfs4_get_block_bug, wbc);
-#ifdef CONFIG_VDFS4_DEBUG
-	if (ret)
-		VDFS4_ERR("(%s) err = %d, ino#%lu name=%s, page index: %lu,  wbc->sync_mode = %d",
-			  get_sid_from_inode(inode), ret, inode->i_ino,
-			  VDFS4_I(inode)->name, page_folio(page)->index,
-			  wbc->sync_mode);
-#endif
-	VT_FINISH(vt_data);
-	return ret;
-redirty_page:
-	redirty_page_for_writepage(wbc, page);
-	unlock_page(page);
-	return 0;
-}
-
 static int vdfs4_readpage_tuned_sw(struct file *file, struct page *page)
 {
 	int ret = 0, decomp_idx = -1, i;
@@ -2024,10 +1976,22 @@ static int vdfs4_readpage_tuned_sw_retry(struct file *file, struct page *page)
 	return _readpage_tuned_retry(file, page, vdfs4_readpage_tuned_sw, "sw");
 }
 
+static int vdfs4_read_folio_tuned_sw_retry(struct file *file,
+		struct folio *folio)
+{
+	return vdfs4_readpage_tuned_sw_retry(file, &folio->page);
+}
+
 #ifdef CONFIG_VDFS4_HW_DECOMPRESS_SUPPORT
 static int vdfs4_readpage_tuned_hw_retry(struct file *file, struct page *page)
 {
 	return _readpage_tuned_retry(file, page, vdfs4_readpage_tuned_hw, "hw");
+}
+
+static int vdfs4_read_folio_tuned_hw_retry(struct file *file,
+		struct folio *folio)
+{
+	return vdfs4_readpage_tuned_hw_retry(file, &folio->page);
 }
 #endif
 
@@ -2109,7 +2073,7 @@ static int vdfs4_writepages(struct address_space *mapping,
 		struct writeback_control *wbc)
 {
 	struct inode *inode = mapping->host;
-	int ret;
+	int ret = 0;
 	struct blk_plug plug;
 	struct vdfs4_sb_info *sbi = inode->i_sb->s_fs_info;
 	struct vdfs4_inode_info *inode_info = VDFS4_I(inode);
@@ -2117,6 +2081,7 @@ static int vdfs4_writepages(struct address_space *mapping,
 			.bio = NULL,
 			.last_block_in_bio = 0,
 	};
+	struct folio *folio = NULL;
 
 	VT_PREPARE_PARAM(vt_data);
 	VT_AOPS_START(vt_data, vdfs_trace_aops_writepages,
@@ -2131,7 +2096,8 @@ static int vdfs4_writepages(struct address_space *mapping,
 
 	blk_start_plug(&plug);
 	/* write dirty pages */
-	ret = write_cache_pages(mapping, wbc, vdfs4_mpage_writepage, &mpd);
+	while ((folio = writeback_iter(mapping, wbc, folio, &ret)))
+		ret = vdfs4_mpage_writepage(folio, wbc, &mpd);
 	if (mpd.bio)
 		vdfs4_mpage_bio_submit(REQ_OP_WRITE, mpd.bio);
 	blk_finish_plug(&plug);
@@ -2165,10 +2131,12 @@ static int vdfs4_writepages_special(struct address_space *mapping,
  * @param [in]	fs_data	Data array
  * @return		Returns error codes
  */
-static int vdfs4_write_begin(struct file *file, struct address_space *mapping,
-			loff_t pos, unsigned len, unsigned flags,
-			struct page **pagep, void **fsdata)
+static int vdfs4_write_begin(const struct kiocb *iocb,
+			struct address_space *mapping,
+			loff_t pos, unsigned len,
+			struct folio **foliop, void **fsdata)
 {
+	struct file *file = iocb->ki_filp;
 	int rc = 0;
 
 	VT_PREPARE_PARAM(vt_data);
@@ -2178,7 +2146,7 @@ static int vdfs4_write_begin(struct file *file, struct address_space *mapping,
 
 	vdfs4_start_transaction(VDFS4_SB(mapping->host->i_sb));
 
-	rc = block_write_begin(mapping, pos, len, flags, pagep,
+	rc = block_write_begin(mapping, pos, len, foliop,
 		vdfs4_get_block_prep_da);
 
 	if (rc)
@@ -2199,15 +2167,16 @@ static int vdfs4_write_begin(struct file *file, struct address_space *mapping,
  * @param [in]	fs_data	Data
  * @return		Returns error codes
  */
-static int vdfs4_write_end(struct file *file, struct address_space *mapping,
+static int vdfs4_write_end(const struct kiocb *iocb,
+			struct address_space *mapping,
 			loff_t pos, unsigned len, unsigned copied,
-			struct page *page, void *fsdata)
+			struct folio *folio, void *fsdata)
 {
 	struct inode *inode = mapping->host;
 	int i_size_changed = 0;
 	int ret;
 
-	ret = block_write_end(file, mapping, pos, len, copied, page, fsdata);
+	ret = block_write_end(pos, len, copied, folio);
 	/*
 	 * No need to use i_size_read() here, the i_size
 	 * cannot change under us because we hold i_mutex.
@@ -2220,8 +2189,8 @@ static int vdfs4_write_end(struct file *file, struct address_space *mapping,
 		i_size_changed = 1;
 	}
 
-	unlock_page(page);
-	put_page(page);
+	folio_unlock(folio);
+	folio_put(folio);
 
 	if (i_size_changed)
 		mark_inode_dirty(inode);
@@ -2550,8 +2519,8 @@ static int vdfs4_create_whiteout(struct dentry *parent, const char *name)
 	if (!dentry)
 		return -ENOMEM;
 
-	ret = vdfs4_create(parent->d_inode, dentry,
-			   S_IFCHR | WHITEOUT_MODE, WHITEOUT_DEV);
+	ret = vdfs4_create(&nop_mnt_idmap, parent->d_inode, dentry,
+			   S_IFCHR | WHITEOUT_MODE, false);
 	if (ret) {
 		dput(dentry);
 		return ret;
@@ -3176,41 +3145,40 @@ err_reserve:
  * The eMMCFS address space operations.
  */
 const struct address_space_operations vdfs4_aops = {
-	.readpage	= vdfs4_readpage,
-	.readpages	= vdfs4_readpages,
-	.writepage	= vdfs4_writepage,
+	.read_folio	= vdfs4_read_folio,
+	.readahead	= vdfs4_readahead,
 	.writepages	= vdfs4_writepages,
 	.write_begin	= vdfs4_write_begin,
 	.write_end	= vdfs4_write_end,
 	.bmap		= vdfs4_bmap,
 	.direct_IO	= vdfs4_direct_IO,
-	.migratepage	= buffer_migrate_page,
-	.releasepage = vdfs4_releasepage,
-/*	.set_page_dirty = __set_page_dirty_buffers,*/
+	.migrate_folio	= buffer_migrate_folio,
+	.release_folio = vdfs4_release_folio,
+/*	.dirty_folio = block_dirty_folio,*/
 
 };
 
 const struct address_space_operations vdfs4_inline_data_aops = {
-	.readpage	= vdfs4_readpage_inline_data,
+	.read_folio	= vdfs4_read_folio_inline_data,
 };
 
 const struct address_space_operations vdfs4_comp_inline_data_aops = {
-	.readpage	= vdfs4_readpage_comp_inline_data,
+	.read_folio	= vdfs4_read_folio_comp_inline_data,
 };
 
 const struct address_space_operations vdfs4_tuned_aops = {
-	.readpage	= vdfs4_readpage_tuned_sw_retry,
+	.read_folio	= vdfs4_read_folio_tuned_sw_retry,
 };
 
 
 #ifdef CONFIG_VDFS4_HW_DECOMPRESS_SUPPORT
 const struct address_space_operations vdfs4_tuned_aops_hw = {
-	.readpage	= vdfs4_readpage_tuned_hw_retry,
+	.read_folio	= vdfs4_read_folio_tuned_hw_retry,
 };
 #endif /* VDFS4_HW_DECOMPRESS_SUPPORT */
 
-static int vdfs4_fail_migrate_page(struct address_space *mapping,
-			struct page *newpage, struct page *page,
+static int vdfs4_fail_migrate_folio(struct address_space *mapping,
+			struct folio *dst, struct folio *src,
 				enum migrate_mode mode)
 {
 	return -EIO;
@@ -3220,15 +3188,15 @@ static int vdfs4_fail_migrate_page(struct address_space *mapping,
  * Special aops for meta inode.
  */
 static const struct address_space_operations vdfs4_aops_special = {
-	.readpage	= vdfs4_readpage_special,
-	.readpages	= vdfs4_readpages_special,
+	.read_folio	= vdfs4_read_folio_special,
+	.readahead	= vdfs4_readahead_special,
 	.writepages	= vdfs4_writepages_special,
 	.write_begin	= vdfs4_write_begin,
 	.write_end	= vdfs4_write_end,
 	.bmap		= vdfs4_bmap,
 	.direct_IO	= vdfs4_direct_IO,
-	.migratepage	= vdfs4_fail_migrate_page,
-/*	.set_page_dirty = __set_page_dirty_buffers,*/
+	.migrate_folio	= vdfs4_fail_migrate_folio,
+/*	.dirty_folio = block_dirty_folio,*/
 };
 
 /**
