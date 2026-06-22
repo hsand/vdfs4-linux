@@ -54,9 +54,9 @@ void vdfs4_fill_cattree_value(struct inode *inode, void *value_area)
 
 	comm_rec->links_count = cpu_to_le64(inode->i_nlink);
 
-	comm_rec->creation_time = vdfs4_encode_time(inode->i_ctime);
-	comm_rec->access_time = vdfs4_encode_time(inode->i_atime);
-	comm_rec->modification_time = vdfs4_encode_time(inode->i_mtime);
+	comm_rec->creation_time = vdfs4_encode_time(inode_get_ctime(inode));
+	comm_rec->access_time = vdfs4_encode_time(inode_get_atime(inode));
+	comm_rec->modification_time = vdfs4_encode_time(inode_get_mtime(inode));
 
 	comm_rec->generation = cpu_to_le32(inode->i_generation);
 	comm_rec->next_orphan_id = cpu_to_le64(VDFS4_I(inode)->next_orphan_id);

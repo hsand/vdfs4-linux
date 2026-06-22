@@ -677,7 +677,7 @@ static int vdfs4_unlink(struct inode *dir, struct dentry *dentry)
 	}
 
 	if (inode->i_nlink) {
-		inode->i_ctime = vdfs4_current_time(dir);
+		inode_set_ctime_to_ts(inode, vdfs4_current_time(dir));
 		goto keep;
 	}
 
@@ -700,8 +700,8 @@ keep:
 	else
 		VDFS4_DEBUG_INO("Files count mismatch");
 
-	dir->i_ctime = vdfs4_current_time(dir);
-	dir->i_mtime = vdfs4_current_time(dir);
+	inode_set_ctime_to_ts(dir, vdfs4_current_time(dir));
+	inode_set_mtime_to_ts(dir, vdfs4_current_time(dir));
 	mark_inode_dirty(dir);
 exit:
 	vdfs4_stop_transaction(sbi);
@@ -2446,7 +2446,11 @@ static int vdfs4_update_inode(struct inode *inode, loff_t newsize)
 		return error;
 
 	i_size_write(inode, newsize);
-	inode->i_mtime = inode->i_ctime = vdfs4_current_time(inode);
+	{
+		struct timespec64 __ts = vdfs4_current_time(inode);
+		inode_set_mtime_to_ts(inode, __ts);
+		inode_set_ctime_to_ts(inode, __ts);
+	}
 
 	return error;
 }
@@ -2657,7 +2661,7 @@ static int vdfs4_rename(struct inode *old_dir, struct dentry *old_dentry,
 			goto error_whiteout;
 	}
 
-	mv_inode->i_ctime = vdfs4_current_time(mv_inode);
+	inode_set_ctime_to_ts(mv_inode, vdfs4_current_time(mv_inode));
 	mark_inode_dirty(mv_inode);
 
 	vdfs4_assert_inode_lock(old_dir);
@@ -2665,12 +2669,12 @@ static int vdfs4_rename(struct inode *old_dir, struct dentry *old_dentry,
 		old_dir->i_size--;
 	else
 		VDFS4_DEBUG_INO("Files count mismatch");
-	old_dir->i_ctime = old_dir->i_mtime = vdfs4_current_time(old_dir);
+	vdfs4_update_ctime_mtime(old_dir, vdfs4_current_time(old_dir));
 	mark_inode_dirty(old_dir);
 
 	vdfs4_assert_inode_lock(new_dir);
 	new_dir->i_size++;
-	new_dir->i_ctime = new_dir->i_mtime = vdfs4_current_time(new_dir);
+	vdfs4_update_ctime_mtime(new_dir, vdfs4_current_time(new_dir));
 	mark_inode_dirty(new_dir);
 	kfree(old_name);
 exit:
@@ -2838,17 +2842,17 @@ static int vdfs4_cross_rename(struct inode *old_dir, struct dentry *old_dentry,
 
 	vdfs4_cattree_w_unlock(sbi);
 
-	old_inode->i_ctime = vdfs4_current_time(old_inode);
+	inode_set_ctime_to_ts(old_inode, vdfs4_current_time(old_inode));
 	mark_inode_dirty(old_inode);
-	new_inode->i_ctime = vdfs4_current_time(new_inode);
+	inode_set_ctime_to_ts(new_inode, vdfs4_current_time(new_inode));
 	mark_inode_dirty(new_inode);
 
 	vdfs4_assert_inode_lock(old_dir);
-	old_dir->i_ctime = old_dir->i_mtime = vdfs4_current_time(old_dir);
+	vdfs4_update_ctime_mtime(old_dir, vdfs4_current_time(old_dir));
 	mark_inode_dirty(old_dir);
 
 	vdfs4_assert_inode_lock(new_dir);
-	new_dir->i_ctime = new_dir->i_mtime = vdfs4_current_time(new_dir);
+	vdfs4_update_ctime_mtime(new_dir, vdfs4_current_time(new_dir));
 	mark_inode_dirty(new_dir);
 
 	vdfs4_stop_transaction(sbi);
@@ -3041,7 +3045,7 @@ static int vdfs4_link(struct dentry *old_dentry, struct inode *dir,
 	VDFS4_DEBUG_MUTEX("cattree mutex w lock un");
 	vdfs4_cattree_w_unlock(sbi);
 
-	inode->i_ctime = vdfs4_current_time(inode);
+	inode_set_ctime_to_ts(inode, vdfs4_current_time(inode));
 
 	ihold(inode);
 	d_instantiate(dentry, inode);
@@ -3050,8 +3054,7 @@ static int vdfs4_link(struct dentry *old_dentry, struct inode *dir,
 	mark_inode_dirty(inode);
 
 	vdfs4_assert_inode_lock(dir);
-	dir->i_ctime = vdfs4_current_time(dir);
-	dir->i_mtime = vdfs4_current_time(dir);
+	vdfs4_update_ctime_mtime(dir, vdfs4_current_time(dir));
 	dir->i_size++;
 	mark_inode_dirty(dir);
 
@@ -3405,10 +3408,10 @@ static long vdfs4_fallocate(struct file *file, int mode,
 		goto err_allocate;
 
 out:
-	inode->i_ctime = vdfs4_current_time(inode);
+	inode_set_ctime_to_ts(inode, vdfs4_current_time(inode));
 	if (!(mode & FALLOC_FL_KEEP_SIZE)) {
 		i_size_write(inode, new_size);
-		inode->i_mtime = vdfs4_current_time(inode);
+		inode_set_mtime_to_ts(inode, vdfs4_current_time(inode));
 	}
 	mark_inode_dirty(inode);
 
@@ -3790,9 +3793,12 @@ static int vdfs4_fill_inode(struct inode *inode,
 	VDFS4_I(inode)->next_orphan_id =
 		le64_to_cpu(folder_val->next_orphan_id);
 
-	inode->i_mtime = vdfs4_decode_time(folder_val->modification_time);
-	inode->i_atime = vdfs4_decode_time(folder_val->access_time);
-	inode->i_ctime = vdfs4_decode_time(folder_val->creation_time);
+	inode_set_mtime_to_ts(inode,
+			vdfs4_decode_time(folder_val->modification_time));
+	inode_set_atime_to_ts(inode,
+			vdfs4_decode_time(folder_val->access_time));
+	inode_set_ctime_to_ts(inode,
+			vdfs4_decode_time(folder_val->creation_time));
 
 	if (S_ISLNK(inode->i_mode)) {
 		inode->i_op = &vdfs4_symlink_inode_operations;
@@ -4393,8 +4399,7 @@ static struct inode *vdfs4_new_inode(struct inode *dir, umode_t mode)
 	inode->i_size = 0;
 	inode->i_generation = le32_to_cpu(vdfs4_sb->exsb.generation);
 	inode->i_blocks = 0;
-	inode->i_mtime = inode->i_atime = inode->i_ctime =
-			vdfs4_current_time(inode);
+	vdfs4_update_ctime_mtime_atime(inode, vdfs4_current_time(inode));
 	atomic_set(&(VDFS4_I(inode)->open_count), 0);
 
 	/* todo actual inheritance mask and mode-dependent masking */
@@ -4516,8 +4521,7 @@ static int vdfs4_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 	else
 		sbi->files_count++;
 
-	dir->i_ctime = vdfs4_current_time(dir);
-	dir->i_mtime = vdfs4_current_time(dir);
+	vdfs4_update_ctime_mtime(dir, vdfs4_current_time(dir));
 	mark_inode_dirty(dir);
 	d_instantiate(dentry, inode);
 #ifdef CONFIG_VDFS4_DEBUG_AUTHENTICAION

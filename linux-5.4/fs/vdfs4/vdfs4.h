@@ -894,6 +894,27 @@ static inline struct timespec64 vdfs4_current_time(struct inode *inode)
 		: (struct timespec64){ktime_get_seconds(), 0};
 }
 
+/*
+ * Pre-6.6 kernels exposed inode->i_ctime/i_mtime/i_atime as plain
+ * struct timespec64 fields; modern kernels only allow access through
+ * inode_get/set_*_to_ts(). These collapse the common "bump ctime and
+ * mtime/atime together" call sites onto the new accessor API.
+ */
+static inline void vdfs4_update_ctime_mtime(struct inode *inode,
+		struct timespec64 ts)
+{
+	inode_set_ctime_to_ts(inode, ts);
+	inode_set_mtime_to_ts(inode, ts);
+}
+
+static inline void vdfs4_update_ctime_mtime_atime(struct inode *inode,
+		struct timespec64 ts)
+{
+	inode_set_ctime_to_ts(inode, ts);
+	inode_set_mtime_to_ts(inode, ts);
+	inode_set_atime_to_ts(inode, ts);
+}
+
 static inline int get_sign_length(enum sign_type type)
 {
 	switch (type) {
