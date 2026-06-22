@@ -79,7 +79,7 @@ static int  __get_checksum_for_bnode(void *bnode_data,
 	if (!sbi->raw_meta_hashtable)
 		return 1;
 
-	index = bnode->pages[0]->index >>
+	index = page_folio(bnode->pages[0])->index >>
 			(sbi->log_super_page_size - PAGE_SHIFT);
 
 	switch (btree->btree_type) {
@@ -478,12 +478,12 @@ static void mark_bnode_accessed(struct vdfs4_bnode *bnode)
 {
 	unsigned int i;
 
-	if (!bnode->pages[0] || PageActive(bnode->pages[0]))
+	if (!bnode->pages[0] || folio_test_active(page_folio(bnode->pages[0])))
 		return;
 
 	for (i = 0; i < bnode->host->pages_per_node; i++) {
 		/* force page activation */
-		SetPageReferenced(bnode->pages[i]);
+		folio_set_referenced(page_folio(bnode->pages[i]));
 		mark_page_accessed(bnode->pages[i]);
 	}
 }
@@ -748,7 +748,7 @@ int vdfs4_check_and_sign_dirty_bnodes(struct page **page,
 		return -ENOMEM;
 	}
 #ifdef CONFIG_VDFS4_META_SANITY_CHECK
-	ret = vdfs4_meta_sanity_check_bnode(bnode_data, btree, page[0]->index);
+	ret = vdfs4_meta_sanity_check_bnode(bnode_data, btree, page_folio(page[0])->index);
 	if (!ret) {
 		VDFS4_WARNING("(%s) bnode sanity check error",
 			      get_sid_from_sbi(btree->sbi));

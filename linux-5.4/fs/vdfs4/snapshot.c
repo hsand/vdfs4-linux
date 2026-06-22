@@ -782,9 +782,9 @@ void vdfs4_check_moved_iblocks(struct vdfs4_sb_info *sbi, struct page **pages,
 
 	chunk_size = (is_tree(i_ino)) ? get_bnode_size_in_pages(sbi, i_ino) : 1;
 	do {
-		/* page->index must be exist in snapshot tables */
+		/* page_folio(page)->index must be exist in snapshot tables */
 		VDFS4_BUG_ON(vdfs4_get_meta_iblock(sbi, i_ino,
-				pages[count]->index, &meta_iblock), sbi);
+				page_folio(pages[count])->index, &meta_iblock), sbi);
 		/* page must be moved */
 		for (i = 0; i < chunk_size; i++) {
 			VDFS4_BUG_ON(!vdfs4_test_and_clear_bit((int)meta_iblock,
@@ -810,7 +810,7 @@ void vdfs4_add_chunk_bitmap(struct vdfs4_sb_info *sbi, struct page *page,
 
 	if (!(fsm_flags & VDFS4_FSM_ALLOC_METADATA))
 		down_write(&snapshot->tables_lock);
-	vdfs4_add_chunk_no_lock(sbi, i_ino, page->index);
+	vdfs4_add_chunk_no_lock(sbi, i_ino, page_folio(page)->index);
 	if (!(fsm_flags & VDFS4_FSM_ALLOC_METADATA))
 		up_write(&snapshot->tables_lock);
 }
@@ -833,7 +833,7 @@ void vdfs4_add_chunk_bnode(struct vdfs4_sb_info *sbi, struct page **pages)
 	for (count = 0; count < bnode_size_in_pages; count++)
 		set_page_dirty_lock(pages[count]);
 	down_write(&snapshot->tables_lock);
-	vdfs4_add_chunk_no_lock(sbi, i_ino, pages[0]->index);
+	vdfs4_add_chunk_no_lock(sbi, i_ino, page_folio(pages[0])->index);
 	up_write(&snapshot->tables_lock);
 }
 

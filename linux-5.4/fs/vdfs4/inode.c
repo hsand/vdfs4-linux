@@ -1437,7 +1437,7 @@ static int vdfs4_readpage_comp_inline_data(struct file *file, struct page *page)
 
 	pages_count = DIV_ROUND_UP(len, PAGE_SIZE);
 
-	if (page->index >= pages_count) {
+	if (page_folio(page)->index >= pages_count) {
 		/* outside inode->i_size */
 		clear_highpage(page);
 		SetPageUptodate(page);
@@ -1451,7 +1451,7 @@ static int vdfs4_readpage_comp_inline_data(struct file *file, struct page *page)
 		return -ENOMEM;
 
 	for (i = 0; i < pages_count; i++) {
-		if ((pgoff_t)i == page->index) {
+		if ((pgoff_t)i == page_folio(page)->index) {
 			pages[i] = page;
 			get_page(page);
 			continue;
@@ -1531,7 +1531,7 @@ static int vdfs4_readpage(struct file *file, struct page *page)
 
 	VT_PREPARE_PARAM(vt_data);
 	VT_AOPS_START(vt_data, vdfs_trace_aops_readpage,
-		      page->mapping->host, file, page->index, 1, AOPS_SYNC);
+		      page->mapping->host, file, page_folio(page)->index, 1, AOPS_SYNC);
 	ret = mpage_readpage(page, vdfs4_get_block);
 
 	VT_FINISH(vt_data);
@@ -1837,7 +1837,7 @@ static int vdfs4_writepage(struct page *page, struct writeback_control *wbc)
 	if (ret)
 		VDFS4_ERR("(%s) err = %d, ino#%lu name=%s, page index: %lu,  wbc->sync_mode = %d",
 			  get_sid_from_inode(inode), ret, inode->i_ino,
-			  VDFS4_I(inode)->name, page->index,
+			  VDFS4_I(inode)->name, page_folio(page)->index,
 			  wbc->sync_mode);
 #endif
 	VT_FINISH(vt_data);
@@ -1855,7 +1855,7 @@ static int vdfs4_readpage_tuned_sw(struct file *file, struct page *page)
 	struct vdfs4_comp_extent_info cext;
 	struct inode *inode = page->mapping->host;
 	struct vdfs4_inode_info *inode_i = VDFS4_I(inode);
-	pgoff_t index = page->index & ~((1lu << (inode_i->fbc->log_chunk_size -
+	pgoff_t index = page_folio(page)->index & ~((1lu << (inode_i->fbc->log_chunk_size -
 					(unsigned long)PAGE_SHIFT)) - 1lu);
 #ifdef CONFIG_VDFS4_SQUEEZE
 	int pages_count = 64;
@@ -1873,7 +1873,7 @@ static int vdfs4_readpage_tuned_sw(struct file *file, struct page *page)
 		goto exit;
 	}
 
-	if (page->index >= ((i_size_read(inode) + PAGE_SIZE - 1) >>
+	if (page_folio(page)->index >= ((i_size_read(inode) + PAGE_SIZE - 1) >>
 					PAGE_SHIFT)) {
 		/* outside inode->i_size */
 		clear_highpage(page);
@@ -1955,7 +1955,7 @@ static int vdfs4_readpage_tuned_hw(struct file *file, struct page *page)
 					PAGE_SHIFT);
 	VT_PREPARE_PARAM(vt_data);
 
-	if (page->index >= file_size_pg) {
+	if (page_folio(page)->index >= file_size_pg) {
 		clear_highpage(page);
 		SetPageUptodate(page);
 		unlock_page(page);

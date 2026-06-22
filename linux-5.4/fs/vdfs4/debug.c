@@ -718,7 +718,7 @@ void vdfs4_print_pages_phy_addr(struct page **pages, unsigned int nr)
 	dma_addr_t phy_addr;
 
 	for (count = 0; count < nr; count++) {
-		index = pages[count]->index;
+		index = page_folio(pages[count])->index;
 		phy_addr = page_to_phys(pages[count]);
 
 		VDFS4_WARNING("page index %lu phy addr:0x%08lx",

@@ -31,6 +31,7 @@
 #include <linux/spinlock.h>
 #include <linux/wait.h>
 #include <linux/pagemap.h>
+#include <linux/pagevec.h>
 #include <linux/completion.h>
 #include <linux/version.h>
 #include <linux/list.h>
@@ -285,19 +286,122 @@ static inline int cmp_2_le64(__le64 a, __le64 b)
 	ret;							\
 })
 
-#define vdfs4_vm_map_ram(...) ({				\
+/*
+ * vm_map_ram() dropped its pgprot_t argument (it always maps PAGE_KERNEL
+ * now), so callers that used to pass a protection - e.g. PAGE_KERNEL_RO
+ * for read-only bnodes - just lose that extra debug-only write guard.
+ */
+#define vdfs4_vm_map_ram(pages, count, node, ...) ({		\
 	unsigned noio_flags = memalloc_noio_save();		\
-	void *ret = vm_map_ram(__VA_ARGS__);			\
+	void *ret = vm_map_ram(pages, count, node);		\
 	int retry = VDFS4_VMEM_RETRY_CNT;			\
 	while (unlikely(!ret) && retry--) {			\
 		VDFS4_WARNING("(NOMEM)(%s():%d, %d):vm_map\n",	\
 			      __func__, __LINE__, retry);	\
 		msleep(VDFS4_VMEM_RETRY_INTERVAL);		\
-		ret = vm_map_ram(__VA_ARGS__);			\
+		ret = vm_map_ram(pages, count, node);		\
 	}							\
 	memalloc_noio_restore(noio_flags);			\
 	ret;							\
 })
+
+/*
+ * --- Kernel compatibility shims (5.4 -> modern folio-based page cache) ---
+ *
+ * vdfs4 only ever deals with order-0 pages (it allocates/looks up pages
+ * one at a time and never asks for huge folios), so for all of these we
+ * can reintroduce the old page-based helper as a thin wrapper around the
+ * current folio API instead of folio-ifying every call site.
+ */
+
+/* find_or_create_page() was folded into the folio API and removed. */
+static inline struct page *find_or_create_page(struct address_space *mapping,
+		pgoff_t index, gfp_t gfp_mask)
+{
+	struct folio *folio = __filemap_get_folio(mapping, index,
+			FGP_LOCK | FGP_ACCESSED | FGP_CREAT, gfp_mask);
+
+	if (IS_ERR(folio))
+		return NULL;
+	return &folio->page;
+}
+
+/*
+ * struct pagevec / pagevec_*() were replaced kernel-wide by
+ * struct folio_batch. Reintroduce the old page-array pagevec API
+ * since the metadata writeback path here only ever juggles raw
+ * struct page pointers.
+ */
+struct pagevec {
+	unsigned long nr;
+	struct page *pages[PAGEVEC_SIZE];
+};
+
+static inline void pagevec_init(struct pagevec *pvec)
+{
+	pvec->nr = 0;
+}
+
+static inline unsigned int pagevec_count(struct pagevec *pvec)
+{
+	return pvec->nr;
+}
+
+static inline void pagevec_release(struct pagevec *pvec)
+{
+	if (pvec->nr)
+		release_pages(pvec->pages, pvec->nr);
+	pvec->nr = 0;
+}
+
+/*
+ * find_get_pages_range_tag() was replaced by the folio_batch-based
+ * filemap_get_folios_tag(); adapt it back onto a flat struct page **
+ * output array bounded by max_pages, the same contract the old API had.
+ */
+static inline unsigned vdfs4_find_get_pages_range_tag(
+		struct address_space *mapping, pgoff_t *index, pgoff_t end,
+		xa_mark_t tag, unsigned int max_pages, struct page **pages)
+{
+	struct folio_batch fbatch;
+	unsigned int ret = 0;
+
+	folio_batch_init(&fbatch);
+	while (ret < max_pages) {
+		unsigned int i, nr;
+		pgoff_t rewind = 0;
+		bool need_rewind = false;
+
+		nr = filemap_get_folios_tag(mapping, index, end, tag, &fbatch);
+		if (!nr)
+			break;
+
+		for (i = 0; i < nr; i++) {
+			struct folio *folio = fbatch.folios[i];
+
+			if (need_rewind) {
+				folio_put(folio);
+				continue;
+			}
+			if (ret == max_pages) {
+				rewind = folio->index;
+				need_rewind = true;
+				folio_put(folio);
+				continue;
+			}
+			pages[ret++] = &folio->page;
+		}
+		/* refs for entries we kept were handed off to pages[];
+		 * the rest were already put back above.
+		 */
+		fbatch.nr = 0;
+		if (need_rewind) {
+			*index = rewind;
+			break;
+		}
+	}
+	return ret;
+}
 
 /*
  * Delayed Discard Magic means means the erase block chunk needs to send

@@ -31,7 +31,7 @@
 #define list_to_page(head) (list_entry((head)->prev, struct page, lru))
 #define list_to_page_index(pos, head, index) \
 	for (pos = list_entry((head)->prev, struct page, lru); \
-		pos->index != index;\
+		page_folio(pos)->index != index;\
 	pos = list_entry((pos)->prev, struct page, lru))
 
 enum compr_type vdfs4_get_comprtype_by_magic(const char *magic, int len)

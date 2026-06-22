@@ -711,12 +711,12 @@ static int vdfs4_validate_bitmap(struct page *page, void *buff,
 		}
 	}
 
-	version = vdfs4_get_page_version(sbi, page->mapping->host, page->index);
+	version = vdfs4_get_page_version(sbi, page->mapping->host, page_folio(page)->index);
 	real_version = VDFS4_BITMAP_VERSION(p_buff);
 
 	if (real_version != version) {
 		VDFS4_ERR("(%s) read bitmap %s from disk fail:version mismatch iblock:%lu,must be :%u.%u, readed :%u.%u",
-			  get_sid_from_sbi(sbi), magic, page->index,
+			  get_sid_from_sbi(sbi), magic, page_folio(page)->index,
 			  VDFS4_MOUNT_COUNT(version),
 			  VDFS4_SYNC_COUNT(version),
 			  VDFS4_MOUNT_COUNT(real_version),
@@ -732,9 +732,9 @@ static int vdfs4_validate_bitmap(struct page *page, void *buff,
 				CRC32_SIZE) != 0) {
 		ret_val = -EINVAL;
 		VDFS4_ERR("(%s) read bimap %s:%lu from disk fail: CRC mismatch",
-			  get_sid_from_sbi(sbi), magic, page->index);
+			  get_sid_from_sbi(sbi), magic, page_folio(page)->index);
 		VDFS4_ERR("(%s) index:%lu phy addr: 0x%llx",
-			  get_sid_from_sbi(sbi), page->index,
+			  get_sid_from_sbi(sbi), page_folio(page)->index,
 			  (unsigned long long)page_to_phys(page));
 		destroy_layout(sbi);
 	}
@@ -979,18 +979,18 @@ static int vdfs4_init_bitmap_page(struct vdfs4_sb_info *sbi, ino_t ino_n,
 
 static void __dump_tagged_pages(struct address_space *mapping, unsigned tag)
 {
-	struct radix_tree_iter iter;
-	void **slot;
+	unsigned long index;
+	void *entry;
 
-	radix_tree_for_each_tagged(slot, &mapping->i_pages, &iter, 0, tag) {
-		struct page *page = *slot;
+	xa_for_each_marked(&mapping->i_pages, index, entry, tag) {
+		struct page *page = entry;
 
 		VDFS4_ERR("mapping %p index %ld page %p",
-			  mapping, iter.index, page);
-		if (page)
+			  mapping, index, page);
+		if (!xa_is_value(entry) && page)
 			VDFS4_ERR("page %ld mapping %p index %ld flags %lx refcount %d",
 				  page_to_pfn(page), page->mapping,
-				  page->index, page->flags,
+				  page_folio(page)->index, page->flags,
 				  page_count(page));
 	}
 }
@@ -1051,7 +1051,7 @@ static int get_pages_from_mapping(struct vdfs4_sb_info *sbi,
 					(1 << (sbi->log_blocks_in_page
 					+ sbi->log_blocks_in_leb)))) :
 					(unsigned long)PAGEVEC_SIZE;
-			pvec->nr = find_get_pages_range_tag(*current_mapping,
+			pvec->nr = vdfs4_find_get_pages_range_tag(*current_mapping,
 					index, (pgoff_t)-1, PAGECACHE_TAG_DIRTY,
 					size, pvec->pages);
 			nr_pages = pagevec_count(pvec);
@@ -1186,18 +1186,18 @@ static int vdfs4_sign_mapping_pages(struct vdfs4_sb_info *sbi,
 			if ((pvec->nr - i) < tree->pages_per_node) {
 				VDFS4_ERR("(%s) incomplete bnode: %ld %ld %ld",
 					   get_sid_from_sbi(sbi),
-					   ino, pages[0]->index,
+					   ino, page_folio(pages[0])->index,
 					   pvec->nr - i);
 				ret = -EFAULT;
 				goto ERR_TABLES_LOCK;
 			}
 
 			for (j = 1; j < tree->pages_per_node; j++) {
-				if (pages[j]->index != pages[0]->index + j) {
+				if (page_folio(pages[j])->index != page_folio(pages[0])->index + j) {
 					VDFS4_ERR("(%s) noncontiguous bnode pages: %ld %ld != %ld + %d",
 						  get_sid_from_sbi(sbi), ino,
-						  pages[j]->index,
-						  pages[0]->index, j);
+						  page_folio(pages[j])->index,
+						  page_folio(pages[0])->index, j);
 					ret = -EFAULT;
 					goto ERR_TABLES_LOCK;
 				}
@@ -1207,7 +1207,7 @@ static int vdfs4_sign_mapping_pages(struct vdfs4_sb_info *sbi,
 					tree, version);
 			if (ret)
 				break;
-			table_index = pvec->pages[i]->index
+			table_index = page_folio(pvec->pages[i])->index
 					>> (sbi->log_blocks_in_leb +
 					sbi->block_size_shift - PAGE_SHIFT);
 			table[table_index].mount_count =
@@ -1238,9 +1238,9 @@ static int vdfs4_sign_mapping_pages(struct vdfs4_sb_info *sbi,
 				magic_len, version);
 			if (ret)
 				break;
-			table[pvec->pages[i]->index].mount_count =
+			table[page_folio(pvec->pages[i])->index].mount_count =
 				vdfs4_sb->exsb.mount_counter;
-			table[pvec->pages[i]->index].sync_count =
+			table[page_folio(pvec->pages[i])->index].sync_count =
 					sbi->snapshot_info->sync_count;
 		}
 	}
@@ -1288,7 +1288,7 @@ static int vdfs4_meta_write(struct vdfs4_sb_info *sbi)
 		page = pvec.pages[i];
 
 		ret = get_block_meta_wrapper(current_mapping->host,
-				page->index, &block, 0, 0);
+				page_folio(page)->index, &block, 0, 0);
 		VDFS4_BUG_ON(ret, sbi);
 
 		lock_page(page);
@@ -1405,7 +1405,7 @@ int vdfs4__read(struct inode *inode, int type, struct page **pages,
 			continue;
 		}
 
-		ret = get_block_meta_wrapper(inode, page->index, &block, type,
+		ret = get_block_meta_wrapper(inode, page_folio(page)->index, &block, type,
 				start_block);
 		if (ret || (block == 0)) {
 			ret = (block == 0) ? -EINVAL : ret;
@@ -1876,11 +1876,11 @@ int vdfs4_auth_decompress_hw2(struct inode *inode, struct page *page)
 	int ret = 0, decomp_idx = -1, i;
 	struct vdfs4_comp_extent_info cext;
 	struct vdfs4_inode_info *inode_i = VDFS4_I(inode);
-	int comp_extent_idx = (int)(page->index >> (inode_i->fbc->log_chunk_size
+	int comp_extent_idx = (int)(page_folio(page)->index >> (inode_i->fbc->log_chunk_size
 				- PAGE_SHIFT));
 	struct page **dst_pages = NULL;
 	int pages_count = vdfs4_chunk_page_count(inode, comp_extent_idx);
-	pgoff_t index = page->index & ~((1 << (inode_i->fbc->log_chunk_size -
+	pgoff_t index = page_folio(page)->index & ~((1 << (inode_i->fbc->log_chunk_size -
 					PAGE_SHIFT)) - 1);
 	struct req_hw req_hw = {0};
 	int auth = is_vdfs4_inode_flag_set(inode, VDFS4_AUTH_FILE) &&
@@ -1971,16 +1971,16 @@ int vdfs4_read_chunk(struct page *page, struct page **chunk_pages,
 	unsigned int blocks_n;
 
 	/* Fill comp_extent_info from pre-loaded cext_map/etc data */
-	cext->start_block = inode_i->fbc->cext_map[page->index];
-	cext->block_index = inode_i->fbc->cext_etc[page->index] & 0x80000000 ?
+	cext->start_block = inode_i->fbc->cext_map[page_folio(page)->index];
+	cext->block_index = inode_i->fbc->cext_etc[page_folio(page)->index] & 0x80000000 ?
 		0x5458 : cext->start_block;
 	cext->offset = 0;
-	cext->len_bytes = inode_i->fbc->cext_etc[page->index] & 0xFFFF;
+	cext->len_bytes = inode_i->fbc->cext_etc[page_folio(page)->index] & 0xFFFF;
 	cext->flags = VDFS4_CHUNK_FLAG_UNCOMPR;
 
-	cur_block = inode_i->fbc->cext_map[page->index];
+	cur_block = inode_i->fbc->cext_map[page_folio(page)->index];
 
-	if (inode_i->fbc->cext_etc[page->index] & 0x80000000)	/* in XT : non reordered chunk */
+	if (inode_i->fbc->cext_etc[page_folio(page)->index] & 0x80000000)	/* in XT : non reordered chunk */
 		pages_count = 32;
 
 	pre_block = (cur_block / pages_count) * pages_count;
@@ -2033,9 +2033,9 @@ int vdfs4_read_chunk(struct page *page, struct page **chunk_pages,
 {
 	struct inode *inode = page->mapping->host;
 	struct vdfs4_inode_info *inode_i = VDFS4_I(inode);
-	int comp_extent_idx = (int)(page->index >>
+	int comp_extent_idx = (int)(page_folio(page)->index >>
 			(inode_i->fbc->log_chunk_size - PAGE_SHIFT));
-	pgoff_t index = page->index & ~((1lu << (inode_i->fbc->log_chunk_size -
+	pgoff_t index = page_folio(page)->index & ~((1lu << (inode_i->fbc->log_chunk_size -
 					(unsigned long)PAGE_SHIFT)) - 1lu);
 	sector_t page_idx = 0;
 	int ret = 0, count, type = VDFS4_FBASED_READ_C;
@@ -2491,7 +2491,7 @@ int vdfs4_mpage_writepage(struct page *page,
 	bool need_invalidate = false;
 
 	memset(&extent, 0x0, sizeof(extent));
-	block_in_file = (sector_t)page->index << (PAGE_SHIFT - blkbits);
+	block_in_file = (sector_t)page_folio(page)->index << (PAGE_SHIFT - blkbits);
 	blocksize = (unsigned int)(1 << inode->i_blkbits);
 	if (page_has_buffers(page)) {
 		bh = page_buffers(page);
@@ -2559,7 +2559,7 @@ int vdfs4_mpage_writepage(struct page *page,
 
 	boundary_block = bh->b_blocknr;
 	end_index = (unsigned long int)(i_size >> PAGE_SHIFT);
-	if (page->index >= end_index) {
+	if (page_folio(page)->index >= end_index) {
 		/*
 		 * The page straddles i_size.  It must be zeroed out on each
 		 * and every writepage invocation because it may be mmapped.
@@ -2570,7 +2570,7 @@ int vdfs4_mpage_writepage(struct page *page,
 		 */
 		unsigned offset = i_size & (PAGE_SIZE - 1);
 
-		if (page->index > end_index || !offset) {
+		if (page_folio(page)->index > end_index || !offset) {
 			need_invalidate = true;
 			goto confused;
 		}
